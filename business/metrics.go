@@ -28,7 +28,9 @@ func (in *MetricsService) GetMetrics(q models.IstioMetricsQuery, scaler func(n s
 
 func createMetricsLabelsBuilder(q *models.IstioMetricsQuery) *MetricsLabelsBuilder {
 	lb := NewMetricsLabelsBuilder(q.Direction)
-	lb.Reporter(q.Reporter)
+	if q.Reporter != "both" {
+		lb.Reporter(q.Reporter)
+	}
 
 	namespaceSet := false
 
@@ -151,28 +153,46 @@ func (in *MetricsService) GetStats(queries []models.MetricsStatsQuery) (map[stri
 		err   error
 	}
 
-	statsChan := make(chan statsChanResult, len(queries))
-	var wg sync.WaitGroup
-
-	for _, q := range queries {
-		wg.Add(1)
-		go func(q models.MetricsStatsQuery) {
-			defer wg.Done()
-			stats, err := in.getSingleQueryStats(&q)
-			statsChan <- statsChanResult{key: q.GenKey(), stats: stats, err: err}
-		}(q)
-	}
-	wg.Wait()
-	// All stats are fetched, close channel
-	close(statsChan)
-	// Read channel
-	result := make(map[string]models.MetricsStats)
-	for r := range statsChan {
-		if r.err != nil {
-			return nil, r.err
+	// The number of queries could be high, limit concurrent requests to 10 at a time (see https://github.com/kiali/kiali/issues/5584)
+	// Note that the default prometheus_engine_queries_concurrent_max = 20, so by limiting here to 10 we leave some room for
+	// other users hitting prom while still allowing a decent amount of concurrency.  Prom also has a default query timeout
+	// of 2 minutes, and any queries pending execution (so any number > 20 by default) are still subject to that timer.
+	chunkSize := 10
+	numQueries := len(queries)
+	var queryChunks [][]models.MetricsStatsQuery
+	for i := 0; i < numQueries; i += chunkSize {
+		end := i + chunkSize
+		if end > numQueries {
+			end = numQueries
 		}
-		if r.stats != nil {
-			result[r.key] = *r.stats
+		queryChunks = append(queryChunks, queries[i:end])
+	}
+
+	result := make(map[string]models.MetricsStats)
+
+	for i, queryChunk := range queryChunks {
+		statsChan := make(chan statsChanResult, len(queryChunk))
+		var wg sync.WaitGroup
+
+		for _, q := range queryChunks[i] {
+			wg.Add(1)
+			go func(q models.MetricsStatsQuery) {
+				defer wg.Done()
+				stats, err := in.getSingleQueryStats(&q)
+				statsChan <- statsChanResult{key: q.GenKey(), stats: stats, err: err}
+			}(q)
+		}
+		wg.Wait()
+		// All chunk stats are fetched, close channel
+		close(statsChan)
+		// Read channel
+		for r := range statsChan {
+			if r.err != nil {
+				return nil, r.err
+			}
+			if r.stats != nil {
+				result[r.key] = *r.stats
+			}
 		}
 	}
 	return result, nil
@@ -223,4 +243,32 @@ func createStatsMetricsLabelsBuilder(q *models.MetricsStatsQuery) *MetricsLabels
 		}
 	}
 	return lb
+}
+
+func (in *MetricsService) GetControlPlaneMetrics(q models.IstioMetricsQuery, scaler func(n string) float64) (models.MetricsMap, error) {
+	metrics := make(models.MetricsMap)
+
+	h := in.prom.FetchHistogramRange("pilot_proxy_convergence_time", "", "", &q.RangeQuery)
+	var err error
+	converted, err := models.ConvertHistogram("pilot_proxy_convergence_time", h, models.ConversionParams{Scale: 1})
+	if err != nil {
+		return nil, err
+	}
+	metrics["pilot_proxy_convergence_time"] = append(metrics["pilot_proxy_convergence_time"], converted...)
+
+	metric := in.prom.FetchRateRange("process_cpu_seconds_total", []string{`{app="istiod"}`}, "", &q.RangeQuery)
+	converted, err = models.ConvertMetric("process_cpu_seconds_total", metric, models.ConversionParams{Scale: 1})
+	if err != nil {
+		return nil, err
+	}
+	metrics["process_cpu_seconds_total"] = append(metrics["process_cpu_seconds_total"], converted...)
+
+	metric = in.prom.FetchRange("container_memory_working_set_bytes", `{pod=~"istiod-.*|istio-pilot-.*"}`, "", "", &q.RangeQuery)
+	converted, err = models.ConvertMetric("container_memory_working_set_bytes", metric, models.ConversionParams{Scale: 0.000001})
+	if err != nil {
+		return nil, err
+	}
+	metrics["process_virtual_memory_bytes"] = append(metrics["container_memory_working_set_bytes"], converted...)
+
+	return metrics, nil
 }

@@ -1,13 +1,11 @@
 import { Radio, Dropdown, DropdownToggle, Checkbox, Tooltip, TooltipPosition } from '@patternfly/react-core';
 import * as React from 'react';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
 import { bindActionCreators } from 'redux';
 import { HistoryManager, URLParam } from '../../../app/History';
 import { GraphToolbarState, KialiAppState } from '../../../store/Store';
 import { GraphToolbarActions } from '../../../actions/GraphToolbarActions';
 import { GraphType, EdgeLabelMode, isResponseTimeMode, isThroughputMode, RankMode } from '../../../types/Graph';
-import { KialiAppAction } from 'actions/KialiAppAction';
 import * as _ from 'lodash';
 import { edgeLabelsSelector } from 'store/Selectors';
 import {
@@ -25,6 +23,9 @@ import {
   titleStyle
 } from 'styles/DropdownStyles';
 import { INITIAL_GRAPH_STATE } from 'reducers/GraphDataState';
+import { KialiDispatch } from "types/Redux";
+import { KialiCrippledFeatures } from 'types/ServerConfig';
+import { getCrippledFeatures } from 'services/Api';
 
 type ReduxProps = {
   boxByCluster: boolean;
@@ -62,7 +63,7 @@ type GraphSettingsProps = ReduxProps &
     disabled: boolean;
   };
 
-type GraphSettingsState = { isOpen: boolean };
+type GraphSettingsState = { crippledFeatures?: KialiCrippledFeatures; isOpen: boolean };
 
 interface DisplayOptionType {
   id: string;
@@ -155,6 +156,26 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
       props.showServiceNodes,
       props.toggleServiceNodes
     );
+  }
+
+  componentDidMount(): void {
+    getCrippledFeatures().then(response => {
+      const crippledFeatures = response.data;
+      this.setState({ crippledFeatures: response.data });
+      // strip away any invalid edge options from the url
+      if (
+        (crippledFeatures.responseTime || crippledFeatures.responseTimePercentiles) &&
+        this.props.edgeLabels.some(l => isResponseTimeMode(l))
+      ) {
+        this.props.setEdgeLabels(this.props.edgeLabels.filter(l => !isResponseTimeMode(l)));
+      }
+      if (
+        (crippledFeatures.requestSize && this.props.edgeLabels.includes(EdgeLabelMode.THROUGHPUT_REQUEST)) ||
+        (crippledFeatures.responseSize && this.props.edgeLabels.includes(EdgeLabelMode.THROUGHPUT_RESPONSE))
+      ) {
+        this.props.setEdgeLabels(this.props.edgeLabels.filter(l => !isThroughputMode(l)));
+      }
+    });
   }
 
   componentDidUpdate(prev: GraphSettingsProps) {
@@ -315,6 +336,9 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
       {
         id: EdgeLabelMode.RESPONSE_TIME_GROUP,
         isChecked: edgeLabels.includes(EdgeLabelMode.RESPONSE_TIME_GROUP),
+        isDisabled:
+          this.state.crippledFeatures?.responseTime ||
+          (this.state.crippledFeatures?.responseTimeAverage && this.state.crippledFeatures?.responseTimePercentiles),
         labelText: _.startCase(EdgeLabelMode.RESPONSE_TIME_GROUP),
         tooltip: (
           <div style={{ textAlign: 'left' }}>
@@ -329,12 +353,17 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
             </div>
             <div>- edges into service nodes</div>
             <div>- edges into or out of operation nodes.</div>
+            <div>
+              This option will be disabled if response time telemetry is unavailable. Some options may be disabled for
+              the same reason.
+            </div>
           </div>
         )
       },
       {
         id: EdgeLabelMode.THROUGHPUT_GROUP,
         isChecked: edgeLabels.includes(EdgeLabelMode.THROUGHPUT_GROUP),
+        isDisabled: this.state.crippledFeatures?.requestSize && this.state.crippledFeatures?.responseSize,
         labelText: _.startCase(EdgeLabelMode.THROUGHPUT_GROUP),
         tooltip: (
           <div style={{ textAlign: 'left' }}>
@@ -348,6 +377,10 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
             </div>
             <div>- edges into service nodes</div>
             <div>- edges into or out of operation nodes.</div>
+            <div>
+              This option will be disabled if throughput telemetry is unavailable. Some options may be disabled for the
+              same reason.
+            </div>
           </div>
         )
       },
@@ -381,7 +414,8 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
     const throughputOptions: DisplayOptionType[] = [
       {
         id: EdgeLabelMode.THROUGHPUT_REQUEST,
-        isChecked: edgeLabels.includes(EdgeLabelMode.THROUGHPUT_REQUEST),
+        isChecked: edgeLabels.includes(EdgeLabelMode.THROUGHPUT_REQUEST) && !this.state.crippledFeatures?.requestSize,
+        isDisabled: this.state.crippledFeatures?.requestSize,
         labelText: 'Request',
         tooltip: (
           <div style={{ textAlign: 'left' }}>
@@ -391,7 +425,8 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
       },
       {
         id: EdgeLabelMode.THROUGHPUT_RESPONSE,
-        isChecked: edgeLabels.includes(EdgeLabelMode.THROUGHPUT_RESPONSE),
+        isChecked: edgeLabels.includes(EdgeLabelMode.THROUGHPUT_RESPONSE) && !this.state.crippledFeatures?.responseSize,
+        isDisabled: this.state.crippledFeatures?.responseSize,
         labelText: 'Response',
         tooltip: (
           <div style={{ textAlign: 'left' }}>
@@ -406,24 +441,28 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
         id: EdgeLabelMode.RESPONSE_TIME_AVERAGE,
         labelText: 'Average',
         isChecked: edgeLabels.includes(EdgeLabelMode.RESPONSE_TIME_AVERAGE),
+        isDisabled: this.state.crippledFeatures?.responseTimeAverage,
         tooltip: <div style={{ textAlign: 'left' }}>Average request response time</div>
       },
       {
         id: EdgeLabelMode.RESPONSE_TIME_P50,
         labelText: 'Median',
         isChecked: edgeLabels.includes(EdgeLabelMode.RESPONSE_TIME_P50),
+        isDisabled: this.state.crippledFeatures?.responseTimePercentiles,
         tooltip: <div style={{ textAlign: 'left' }}>Median request response time (50th Percentile)</div>
       },
       {
         id: EdgeLabelMode.RESPONSE_TIME_P95,
         labelText: '95th Percentile',
         isChecked: edgeLabels.includes(EdgeLabelMode.RESPONSE_TIME_P95),
+        isDisabled: this.state.crippledFeatures?.responseTimePercentiles,
         tooltip: <div style={{ textAlign: 'left' }}>Max response time for 95% of requests (95th Percentile)</div>
       },
       {
         id: EdgeLabelMode.RESPONSE_TIME_P99,
         labelText: '99th Percentile',
         isChecked: edgeLabels.includes(EdgeLabelMode.RESPONSE_TIME_P99),
+        isDisabled: this.state.crippledFeatures?.responseTimePercentiles,
         tooltip: <div style={{ textAlign: 'left' }}>Max response time for 99% of requests (99th Percentile)</div>
       }
     ];
@@ -681,7 +720,7 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
                         <Radio
                           id={rtOption.id}
                           isChecked={rtOption.isChecked}
-                          isDisabled={this.props.disabled || edgeLabelOption.isDisabled}
+                          isDisabled={this.props.disabled || edgeLabelOption.isDisabled || rtOption.isDisabled}
                           label={rtOption.labelText}
                           name="rtOptions"
                           onChange={this.toggleEdgeLabelResponseTimeMode}
@@ -714,7 +753,7 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
                         <Radio
                           id={throughputOption.id}
                           isChecked={throughputOption.isChecked}
-                          isDisabled={this.props.disabled || edgeLabelOption.isDisabled}
+                          isDisabled={this.props.disabled || edgeLabelOption.isDisabled || throughputOption.isDisabled}
                           label={throughputOption.labelText}
                           name="throughputOptions"
                           onChange={this.toggleEdgeLabelThroughputMode}
@@ -831,10 +870,22 @@ class GraphSettings extends React.PureComponent<GraphSettingsProps, GraphSetting
     } else {
       switch (mode) {
         case EdgeLabelMode.RESPONSE_TIME_GROUP:
-          this.props.setEdgeLabels([...this.props.edgeLabels, mode, EdgeLabelMode.RESPONSE_TIME_P95]);
+          this.props.setEdgeLabels([
+            ...this.props.edgeLabels,
+            mode,
+            this.state.crippledFeatures?.responseSizePercentiles
+              ? EdgeLabelMode.RESPONSE_TIME_AVERAGE
+              : EdgeLabelMode.RESPONSE_TIME_P95
+          ]);
           break;
         case EdgeLabelMode.THROUGHPUT_GROUP:
-          this.props.setEdgeLabels([...this.props.edgeLabels, mode, EdgeLabelMode.THROUGHPUT_REQUEST]);
+          this.props.setEdgeLabels([
+            ...this.props.edgeLabels,
+            mode,
+            this.state.crippledFeatures?.requestSize
+              ? EdgeLabelMode.THROUGHPUT_RESPONSE
+              : EdgeLabelMode.THROUGHPUT_REQUEST
+          ]);
           break;
         default:
           this.props.setEdgeLabels([...this.props.edgeLabels, mode]);
@@ -882,7 +933,7 @@ const mapStateToProps = (state: KialiAppState) => ({
 });
 
 // Map our actions to Redux
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => {
+const mapDispatchToProps = (dispatch: KialiDispatch) => {
   return {
     setEdgeLabels: bindActionCreators(GraphToolbarActions.setEdgeLabels, dispatch),
     setRankBy: bindActionCreators(GraphToolbarActions.setRankBy, dispatch),

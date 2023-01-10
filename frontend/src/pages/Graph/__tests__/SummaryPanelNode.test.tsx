@@ -4,6 +4,8 @@ import { mount } from 'enzyme';
 import { SummaryPanelNode, SummaryPanelNodeProps } from '../SummaryPanelNode';
 import { MemoryRouter } from 'react-router-dom';
 import { ExpandableSection } from '@patternfly/react-core';
+import { store } from '../../../store/ConfigStore';
+import { Provider } from 'react-redux';
 
 let defaultProps: SummaryPanelNodeProps;
 let nodeData: GraphNodeData;
@@ -30,21 +32,27 @@ describe('SummaryPanelNode', () => {
       duration: 15,
       graphType: GraphType.VERSIONED_APP,
       injectServiceNodes: false,
+      kiosk: '',
       namespaces: [],
       queryTime: 20,
       rankResult: { upperBound: 0 },
       showRank: false,
       rateInterval: '30s',
       step: 15,
-      trafficRates: []
+      trafficRates: [],
+      gateways: null,
+      peerAuthentications: null,
+      serviceDetails: null
     };
   });
 
   it('renders', () => {
     const wrapper = mount(
-      <MemoryRouter>
-        <SummaryPanelNode {...defaultProps} />
-      </MemoryRouter>
+      <Provider store={store}>
+        <MemoryRouter>
+          <SummaryPanelNode {...defaultProps} />
+        </MemoryRouter>
+      </Provider>
     );
     expect(wrapper.exists()).toBeTruthy();
   });
@@ -52,9 +60,11 @@ describe('SummaryPanelNode', () => {
   it('renders workload entry links', () => {
     nodeData = { ...nodeData, workload: 'ratings-v1', hasWorkloadEntry: [{ name: 'first_we' }, { name: 'second_we' }] };
     const wrapper = mount(
-      <MemoryRouter>
-        <SummaryPanelNode {...defaultProps} />
-      </MemoryRouter>
+      <Provider store={store}>
+        <MemoryRouter>
+          <SummaryPanelNode {...defaultProps} />
+        </MemoryRouter>
+      </Provider>
     );
     const weLinks = wrapper.find('a').findWhere(a => a.prop('href') && a.prop('href').includes('workloadentries'));
     expect(weLinks.exists()).toBeTruthy();
@@ -64,9 +74,11 @@ describe('SummaryPanelNode', () => {
   it('renders expandable dropdown for workload entries', () => {
     nodeData = { ...nodeData, workload: 'ratings-v1', hasWorkloadEntry: [{ name: 'first_we' }, { name: 'second_we' }] };
     const wrapper = mount(
-      <MemoryRouter>
-        <SummaryPanelNode {...defaultProps} />
-      </MemoryRouter>
+      <Provider store={store}>
+        <MemoryRouter>
+          <SummaryPanelNode {...defaultProps} />
+        </MemoryRouter>
+      </Provider>
     );
     const expandable = wrapper.find(ExpandableSection);
     expect(expandable.exists()).toBeTruthy();
@@ -82,9 +94,11 @@ describe('SummaryPanelNode', () => {
   it('renders a single link to workload', () => {
     nodeData = { ...nodeData, workload: 'ratings-v1' };
     const wrapper = mount(
-      <MemoryRouter>
-        <SummaryPanelNode {...defaultProps} />
-      </MemoryRouter>
+      <Provider store={store}>
+        <MemoryRouter>
+          <SummaryPanelNode {...defaultProps} />
+        </MemoryRouter>
+      </Provider>
     );
     const weLinks = wrapper.find('a').findWhere(a => a.prop('href') && a.prop('href').includes('workload'));
     expect(weLinks.exists()).toBeTruthy();
@@ -94,9 +108,11 @@ describe('SummaryPanelNode', () => {
   it('shows rank N/A when node rank undefined', () => {
     const props = { ...defaultProps, rankResult: { upperBound: 0 }, showRank: true };
     const wrapper = mount(
-      <MemoryRouter>
-        <SummaryPanelNode {...props} />
-      </MemoryRouter>
+      <Provider store={store}>
+        <MemoryRouter>
+          <SummaryPanelNode {...props} />
+        </MemoryRouter>
+      </Provider>
     );
     const rankText = wrapper.find('span').findWhere(span => {
       const html = span.render().html();
@@ -110,9 +126,11 @@ describe('SummaryPanelNode', () => {
     (nodeData as DecoratedGraphNodeData).rank = 2;
     const props = { ...defaultProps, rankResult: { upperBound: 3 }, showRank: true };
     const wrapper = mount(
-      <MemoryRouter>
-        <SummaryPanelNode {...props} />
-      </MemoryRouter>
+      <Provider store={store}>
+        <MemoryRouter>
+          <SummaryPanelNode {...props} />
+        </MemoryRouter>
+      </Provider>
     );
     const rankText = wrapper.find('span').findWhere(span => {
       const html = span.render().html();

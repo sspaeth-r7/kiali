@@ -33,7 +33,7 @@ import { CertsInfo } from 'types/CertsInfo';
 export interface GlobalState {
   readonly loadingCounter: number;
   readonly isPageVisible: boolean;
-  lastRefreshAt: TimeInMilliseconds;
+  readonly kiosk: string;
 }
 
 export interface NamespaceState {

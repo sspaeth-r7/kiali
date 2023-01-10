@@ -1,6 +1,6 @@
 import * as React from 'react';
 import Label from './Label';
-import { Button, Tooltip, TooltipPosition } from '@patternfly/react-core';
+import { Button, ButtonVariant, Tooltip, TooltipPosition } from '@patternfly/react-core';
 import { style } from 'typestyle';
 import { KialiIcon } from '../../config/KialiIcon';
 
@@ -23,7 +23,7 @@ const linkStyle = style({
 });
 
 const infoStyle = style({
-  margin: '0 4px 2px 5px'
+  margin: '4px 4px 2px 5px'
 });
 
 const labelsContainerStyle = style({
@@ -64,7 +64,7 @@ class Labels extends React.Component<Props, State> {
         <Button
           data-test="label_more"
           key="label_more"
-          variant="link"
+          variant={ButtonVariant.link}
           className={linkStyle}
           onClick={this.expandLabels}
         >
@@ -79,7 +79,7 @@ class Labels extends React.Component<Props, State> {
   renderLabels() {
     return this.labelKeys().map((key, i) => {
       return this.showItem(i) ? (
-        <div key={'label_' + i} data-test={key + '-label-container'}>
+        <div key={'label_div_' + i} data-test={key + '-label-container'}>
           <Label key={'label_' + i} name={key} value={this.props.labels ? this.props.labels[key] : ''} />
         </div>
       ) : undefined;

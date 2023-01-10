@@ -14,6 +14,8 @@ import {
   AuthorizationPolicy,
   DestinationRule,
   Gateway,
+  K8sGateway,
+  K8sHTTPRoute,
   PeerAuthentication,
   Sidecar,
   VirtualService
@@ -34,6 +36,8 @@ export type IstioConfigItem =
   | DestinationRule
   | PeerAuthentication
   | Gateway
+  | K8sGateway
+  | K8sHTTPRoute
   | VirtualService;
 
 export interface ConfigPreviewItem {
@@ -59,6 +63,7 @@ interface State {
   items: ConfigPreviewItem[];
   newIstioPage: boolean;
   mainTab: string;
+  modalOpen: boolean;
 }
 
 const separator = '\n---\n\n';
@@ -70,11 +75,12 @@ export class IstioConfigPreview extends React.Component<Props, State> {
     this.state = {
       mainTab: this.props.items.length > 0 ? this.props.items[0].title.toLocaleLowerCase().replace(/\s/g, '') : '',
       newIstioPage: newIstioPage,
-      items: cloneDeep(this.props.items)
+      items: cloneDeep(this.props.items),
+      modalOpen: this.props.isOpen
     };
   }
   componentDidUpdate(prevProps: Props) {
-    if (!_.isEqual(prevProps.items, this.props.items)) {
+    if (!_.isEqual(prevProps.items, this.props.items) || prevProps.isOpen !== this.props.isOpen) {
       this.setStateValues(this.props.items);
     }
   }
@@ -82,7 +88,8 @@ export class IstioConfigPreview extends React.Component<Props, State> {
   setStateValues = (items: ConfigPreviewItem[]) => {
     this.setState({
       mainTab: items.length > 0 ? items[0].title.toLocaleLowerCase().replace(/\s/g, '') : '',
-      items: cloneDeep(items)
+      items: cloneDeep(items),
+      modalOpen: this.props.isOpen
     });
   };
 
@@ -129,12 +136,13 @@ export class IstioConfigPreview extends React.Component<Props, State> {
 
   addResource = (item: ConfigPreviewItem) => {
     const key = item.title.toLocaleLowerCase().replace(/\s/g, '');
-    const propItems =
+    const filterItems =
       this.props.items.length > 0
         ? (this.state.newIstioPage ? this.groupItems(this.props.items) : this.props.items).filter(
             it => it.title === item.title
-          )[0].items
+          )
         : [];
+    const  propItems = filterItems.length > 0 ? filterItems[0].items : [];
     return (
       <Tab eventKey={key} key={key + '_tab_preview'} title={item.title}>
         <EditResources
@@ -171,16 +179,13 @@ export class IstioConfigPreview extends React.Component<Props, State> {
       <Modal
         width={'75%'}
         title={this.props.title ? this.props.title : 'Preview Traffic Policies '}
-        isOpen={this.props.isOpen}
+        isOpen={this.state.modalOpen}
         onClose={this.props.onClose}
         onKeyPress={e => (this.props.onKeyPress ? this.props.onKeyPress(e) : {})}
         actions={
           this.props.actions
             ? this.props.actions
             : [
-                <Button key="cancel" variant="secondary" onClick={this.props.onClose}>
-                  Cancel
-                </Button>,
                 <Button
                   key={this.props.opTarget}
                   variant={this.props.opTarget === 'delete' ? 'danger' : 'primary'}
@@ -189,6 +194,9 @@ export class IstioConfigPreview extends React.Component<Props, State> {
                   data-test={this.props.opTarget}
                 >
                   {this.props.opTarget && this.props.opTarget[0].toUpperCase() + this.props.opTarget.substr(1)}
+                </Button>,
+                <Button key="cancel" variant={ButtonVariant.secondary} onClick={this.props.onClose}>
+                  Cancel
                 </Button>
               ]
         }

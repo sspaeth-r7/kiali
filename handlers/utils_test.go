@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/kiali/kiali/business"
+	"github.com/kiali/kiali/business/authentication"
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/kubernetes/kubetest"
 	"github.com/kiali/kiali/prometheus"
@@ -26,6 +26,7 @@ func utilSetupMocks(t *testing.T) (promClientSupplier, *prometheustest.PromAPIMo
 	config.Set(conf)
 	k8s := new(kubetest.K8SClientMock)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetNamespace", "ns1").Return(&core_v1.Namespace{ObjectMeta: meta_v1.ObjectMeta{Name: "ns1"}}, nil)
 	k8s.On("GetNamespace", "ns2").Return(&core_v1.Namespace{ObjectMeta: meta_v1.ObjectMeta{Name: "ns2"}}, nil)
 	k8s.On("GetNamespace", "nsNil").Return((*core_v1.Namespace)(nil), errors.New("no privileges"))
@@ -48,7 +49,7 @@ func TestCreateMetricsServiceForNamespace(t *testing.T) {
 	prom, _, _ := utilSetupMocks(t)
 
 	req := httptest.NewRequest("GET", "/foo", nil)
-	req = req.WithContext(context.WithValue(req.Context(), "authInfo", &api.AuthInfo{Token: "test"}))
+	req = req.WithContext(authentication.SetAuthInfoContext(req.Context(), &api.AuthInfo{Token: "test"}))
 
 	w := httptest.NewRecorder()
 	srv, info := createMetricsServiceForNamespace(w, req, prom, "ns1")
@@ -64,7 +65,7 @@ func TestCreateMetricsServiceForNamespaceForbidden(t *testing.T) {
 	prom, _, _ := utilSetupMocks(t)
 
 	req := httptest.NewRequest("GET", "/foo", nil)
-	req = req.WithContext(context.WithValue(req.Context(), "authInfo", &api.AuthInfo{Token: "test"}))
+	req = req.WithContext(authentication.SetAuthInfoContext(req.Context(), &api.AuthInfo{Token: "test"}))
 
 	w := httptest.NewRecorder()
 	srv, info := createMetricsServiceForNamespace(w, req, prom, "nsNil")
@@ -79,7 +80,7 @@ func TestCreateMetricsServiceForSeveralNamespaces(t *testing.T) {
 	prom, _, _ := utilSetupMocks(t)
 
 	req := httptest.NewRequest("GET", "/foo", nil)
-	req = req.WithContext(context.WithValue(req.Context(), "authInfo", &api.AuthInfo{Token: "test"}))
+	req = req.WithContext(authentication.SetAuthInfoContext(req.Context(), &api.AuthInfo{Token: "test"}))
 
 	w := httptest.NewRecorder()
 	srv, info := createMetricsServiceForNamespaces(w, req, prom, []string{"ns1", "ns2", "nsNil"})

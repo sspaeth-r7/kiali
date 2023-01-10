@@ -1,12 +1,10 @@
 import * as React from 'react';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
-import { SimpleList, SimpleListItem, Button, Checkbox, Divider } from '@patternfly/react-core';
+import { SimpleList, SimpleListItem, Button, Checkbox, Divider, ButtonVariant } from '@patternfly/react-core';
 import { SyncAltIcon } from '@patternfly/react-icons';
 import { style } from 'typestyle';
 
 import { KialiAppState } from 'store/Store';
-import { KialiAppAction } from 'actions/KialiAppAction';
 import { JaegerThunkActions } from 'actions/JaegerThunkActions';
 import history from '../../app/History';
 import * as API from '../../services/Api';
@@ -19,12 +17,18 @@ import { TraceListItem } from 'components/JaegerIntegration/TraceListItem';
 import { summaryFont } from './SummaryPanelCommon';
 import { DecoratedGraphNodeData } from 'types/Graph';
 import transformTraceData from 'utils/tracing/TraceTransform';
+import {isParentKiosk, kioskContextMenuAction} from "../../components/Kiosk/KioskActions";
+import { KialiDispatch } from "../../types/Redux";
 
-type Props = {
+type ReduxProps = {
+  kiosk: string;
+  selectedTrace?: JaegerTrace;
+  setTraceId: (traceId?: string) => void;
+};
+
+type Props = ReduxProps & {
   nodeData: DecoratedGraphNodeData;
   queryTime: TimeInSeconds;
-  setTraceId: (traceId?: string) => void;
-  selectedTrace?: JaegerTrace;
 };
 
 type State = {
@@ -162,7 +166,7 @@ class SummaryPanelNodeTraces extends React.Component<Props, State> {
             isDisabled={this.state.useGraphRefresh}
             onClick={() => this.loadTraces()}
             aria-label="Refresh"
-            variant="secondary"
+            variant={ButtonVariant.secondary}
             className={refreshButtonStyle}
           >
             <SyncAltIcon />
@@ -184,7 +188,16 @@ class SummaryPanelNodeTraces extends React.Component<Props, State> {
             })}
           </SimpleList>
         )}
-        <Button style={summaryFont} onClick={() => history.push(tracesDetailsURL)}>
+        <Button
+          style={summaryFont}
+          onClick={() => {
+            if (isParentKiosk(this.props.kiosk)) {
+              kioskContextMenuAction(tracesDetailsURL);
+            } else {
+              history.push(tracesDetailsURL);
+            }
+          }}
+        >
           Show Traces
         </Button>
       </div>
@@ -193,10 +206,11 @@ class SummaryPanelNodeTraces extends React.Component<Props, State> {
 }
 
 const mapStateToProps = (state: KialiAppState) => ({
+  kiosk: state.globalState.kiosk,
   selectedTrace: state.jaegerState.selectedTrace
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
   setTraceId: (traceId?: string) => dispatch(JaegerThunkActions.setTraceId(traceId))
 });
 

@@ -11,11 +11,10 @@ Installed all dev dependencies from frontend folder. Ensure the `baseUrl` field 
 Before you start using Cypress suite, you might need export some environment variables - depending on environment where tests are executed. If your authentication method defaults to `anonymous` **(i.e. dev env), no actions are needed.**
 
 ```bash
-export CYPRESS_BASE_URL=<value>        # defaults to http://localhost:3000
-export CYPRESS_USERNAME=<value>        # defaults to jenkins, opt. kubeadmin
-export CYPRESS_PASSWD=<value>          # no defaults 
-export CYPRESS_AUTH_PROVIDER=<value>   # defaults to my_htpasswd_provider, 
-                                       # or optionally openshift for AWS
+export CYPRESS_BASE_URL=<value>               # defaults to http://localhost:3000
+export CYPRESS_USERNAME=<value>               # defaults to jenkins, opt. kubeadmin
+export CYPRESS_PASSWD=<value>                 # no defaults
+export CYPRESS_AUTH_PROVIDER=<value>          # defaults to my_htpasswd_provider
 ```
 
 Tests can be run with the cypress browser:
@@ -38,6 +37,7 @@ cypress/
 ├─ integration/           <- all tests are here
 │  ├─ common/             <- step definition
 │  ├─ featureFiles/       <- BDD.feature files 
+├─ perf/                  <- all perf tests are here
 ├─ support/
 │  ├─ commands.ts         <- custom cy.commands()
 ├─ screenshots/           <- pictures from test run
@@ -62,9 +62,101 @@ cypress/
     * We want to refactor broken code and if its heavily used, move it into a custom command file (cypress/support/commands.ts) - i.e. `cy.login()`, `cy.kiali_apply_config()` lives there
 5) Test case execution should be all green, you are ready to commit your test case. You might want verify whole regression run locally - so you did not introduce any braking changes in your PR
 
+## Performance Tests
+
+These tests coarsely measure metrics such as page load time. They are meant to give a general baseline of performance but are not useful for benchmarking.  This is roughly how to use the tests:
+
+1. Environment is setup either manually or with the perf cluster hack script.
+2. Tests are run multiple times with one of the make commands.
+3. Results for each run are copied manually from the output folder to a text document or spreadsheet.
+4. Results are analyzed.
+
+### Setup
+
+These tests are environment agnostic however they do assume that you have:
+
+1. Deployed istio and kiali
+2. Run the [install testing demos script](../../hack/istio/install-testing-demos.sh)
+
+If you'd like to test on ibmclould, there's a hack script that will setup a testing environment for you. See the "Running on IBM Cloud" section for more details.
+
+### Run performance tests
+
+From the kiali root:
+
+cli
+```
+make -e CYPRESS_BASE_URL=http://mybaseurl perf-tests-run
+```
+
+**Note**: The performance tests are typically long running tests that perform many actions. The Cypress GUI generally does not handle this well so it's recommended to use the CLI instead.
+
+gui
+```
+make perf-tests-gui
+```
+
+yarn from current dir
+```
+yarn cypress --config-file cypress-perf.json
+```
+
+### Parameterizing tests
+
+You can adjust some inputs of the performance tests by changing the [fixture files](fixtures/perf/).
+
+### Limiting the suite to a single test
+
+You can easily limit your test run to a single test but unfortunately it requires a minor code change. Adding a `.only` to a `describe` or `it` statement will limit testing to that particular block. For example:
+
+```
+it.only('loads the overview page', () => {
+ ...
+})
+
+it('Measures Graph load time', () => {
+ ...
+})
+```
+
+With the addition of the `.only`, only the "loads the overview page" test will be run.
+
+### Results
+
+Results are logged here: `logs/performance.txt`.
+
+### Cleanup
+
+If the test runner fails for any reason, this can leave some resources lingering around after the tests have run. You can clean these up by running:
+```
+kubectl delete --ignore-not-found=true -l kiali.io=perf-testing ns
+```
+
+### Running on IBM Cloud:
+
+You can use the [perf hack script](../../hack/perf-ibmcloud-openshift.sh) to spin up an openshift cluster on IBMCloud with Kiali + Istio + Kiali demos installed. To run the perf tests against the cluster, you must generate an IBM Cloud API Key and pass that in as the `CYPRESS_PASSWD`.
+
+```
+make -e CYPRESS_BASE_URL="https://<kiali-openshift-route>" -e CYPRESS_PASSWD="<IBMCloud API Key>" -e CYPRESS_USERNAME="IAM#<SSO-EMAIL>" -e CYPRESS_AUTH_PROVIDER="ibmcloud" perf-tests-gui
+```
+
+#### Logging into your cluster on IBM Cloud:
+
+For `kubectl` or `oc` access to your cluster, use:
+
+```
+ibmcloud oc cluster config --cluster <cluster-name> --admin
+```
+
+#### Teardown cluster
+
+The cluster can be cleaned up with the `ibmcloud-openshift.sh` script. You must provide the cluster name without the trailing `-cluster` e.g. if your cluster is named `my-perf-cluster` you should pass `my-perf` as the name prefix (np).
+
+```
+./hack/ibmcloud-openshift.sh -np <cluster-name-without-trailing-cluster> delete
+```
 
 ## Testing Strategies
-
 
 
 ### Graph
@@ -78,7 +170,13 @@ The kiali graph is primarily a canvas element which makes it more difficult to t
 Try setting the `numTestsKeptInMemory` setting to a lower value.
 
 ```
-make -e CYPRESS_NUM_TESTS_KEPT_IN_MEMORY=0 cypress
+make -e CYPRESS_NUM_TESTS_KEPT_IN_MEMORY=0 cypress-run
+```
+
+For debugging locally, try setting the `video` setting to true to watch the recordings from test run.
+
+```
+make -e CYPRESS_VIDEO=true cypress-run
 ```
 
 ### Tests are flaking 

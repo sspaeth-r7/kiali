@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"io/ioutil"
+	"io"
 	"net/http"
 	"sync"
 
@@ -149,7 +149,7 @@ func WorkloadUpdate(w http.ResponseWriter, r *http.Request) {
 		includeValidations = true
 	}
 
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		RespondWithError(w, http.StatusBadRequest, "Update request with bad update patch: "+err.Error())
 	}
@@ -228,7 +228,7 @@ func PodLogs(w http.ResponseWriter, r *http.Request) {
 		queryParams.Get("duration"),
 		queryParams.Get("isProxy"),
 		queryParams.Get("sinceTime"),
-		queryParams.Get("tailLines"))
+		queryParams.Get("maxLines"))
 
 	if err != nil {
 		handleErrorResponse(w, err)
@@ -236,11 +236,9 @@ func PodLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch pod logs
-	podLogs, err := business.Workload.GetPodLogs(namespace, pod, opts)
+	err = business.Workload.StreamPodLogs(namespace, pod, opts, w)
 	if err != nil {
 		handleErrorResponse(w, err)
 		return
 	}
-
-	RespondWithJSON(w, http.StatusOK, podLogs)
 }

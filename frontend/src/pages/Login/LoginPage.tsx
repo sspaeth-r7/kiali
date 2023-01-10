@@ -1,9 +1,10 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
 import {
   ActionGroup,
+  Alert,
   Button,
+  ButtonVariant,
   Form,
   FormGroup,
   FormHelperText,
@@ -13,14 +14,12 @@ import {
   LoginPage as LoginNext,
   TextInput
 } from '@patternfly/react-core';
-import { ExclamationCircleIcon, ExclamationTriangleIcon } from '@patternfly/react-icons';
 import { KialiAppState, LoginSession, LoginStatus } from '../../store/Store';
 import { AuthStrategy } from '../../types/Auth';
 import { authenticationConfig, kialiLogo } from '../../config';
-import { KialiAppAction } from '../../actions/KialiAppAction';
 import LoginThunkActions from '../../actions/LoginThunkActions';
 import { isAuthStrategyOAuth } from '../../config/AuthenticationConfig';
-//import { c_wizard__nav_BoxShadow } from '@patternfly/react-tokens';
+import { KialiDispatch } from '../../types/Redux';
 
 type LoginProps = {
   status: LoginStatus;
@@ -102,22 +101,36 @@ export class LoginPage extends React.Component<LoginProps, LoginState> {
       }
     }
   };
-  renderMessage = (message: React.ReactNode | undefined, type: string | undefined, key: string) => {
+  renderMessage = (
+    message: React.ReactNode | undefined,
+    type: 'success' | 'danger' | 'warning' | 'info' | 'default' | undefined,
+    key: string
+  ) => {
     if (!message) {
       return '';
     }
-    const variant = type
-      ? type
-      : this.props.status === LoginStatus.error || this.state.filledInputs
-      ? 'danger'
-      : 'warning';
-    const icon = variant === 'danger' ? <ExclamationCircleIcon /> : <ExclamationTriangleIcon />;
-    return (
-      <span key={key} style={{ color: variant === 'danger' ? '#c00' : '#f0ab00', fontWeight: 'bold', fontSize: 16 }}>
-        {icon}
-        &nbsp; {message}
-      </span>
-    );
+    const variant = type ?? (this.props.status === LoginStatus.error || this.state.filledInputs ? 'danger' : 'warning');
+    return <Alert key={key} variant={variant} isInline={true} isPlain={true} title={message} />;
+  };
+
+  extractOAuthErrorMessages = (urlParams: URLSearchParams, messagesArray: any[]) => {
+    // When using OpenId auth, the IdP can redirect back with `error` and `error_description`
+    // as url parameters. If these params are set, we cannot assume they are not spoofed, so we only
+    // log the errors but do not show them in the UI. We only show a generic error message.
+    // Reference: https://openid.net/specs/openid-connect-core-1_0-final.html#AuthError
+    if (urlParams.get('error')) {
+      if (urlParams.get('error_description')) {
+        console.warn(`Authentication error_description: ${urlParams.get('error_description')}`)
+        messagesArray.push(
+          this.renderMessage(`Authentication failed!`, 'danger', 'idp-err')
+        );
+      } else {
+        console.warn(`Authentication error: ${urlParams.get('error')}`)
+        messagesArray.push(
+          this.renderMessage(`Authentication failed.`, 'danger', 'idp-err')
+        );
+      }
+    }
   };
 
   getHelperMessage = () => {
@@ -137,35 +150,25 @@ export class LoginPage extends React.Component<LoginProps, LoginState> {
       messages.push(this.renderMessage(this.props.postLoginErrorMsg, undefined, 'postLoginError'));
     }
 
-    // Get error messages passed on the URL
+    // Get error messages passed on the URL (authorization code flow of OAuth/OpenId)
     const pageParams = window.location.search;
     const urlParams = new URLSearchParams(pageParams);
+    this.extractOAuthErrorMessages(urlParams, messages);
 
-    // When using OpenId auth, the IdP can redirect back with `error` and `error_description`
-    // as url parameters. If these params are set, show them as errors.
-    // Reference: https://openid.net/specs/openid-connect-core-1_0-final.html#AuthError
-    if (urlParams.get('error')) {
-      if (urlParams.get('error_description')) {
-        messages.push(
-          this.renderMessage(`Authentication error: ${urlParams.get('error_description')}`, 'danger', 'idp-err')
-        );
-      } else {
-        messages.push(
-          this.renderMessage(
-            `The OpenID provider returned the following error code: ${urlParams.get('error')}`,
-            'danger',
-            'idp-err'
-          )
-        );
-      }
-    }
+    // The implicit flow of OAuth/OpenId passes errors as hash parameters which aren't accessible
+    // to the back-end. So, here we catch them and show error messages, if needed.
+    const hashParamsString = window.location.hash;
+    const hashParams = new URLSearchParams(hashParamsString.substring(1));
+    this.extractOAuthErrorMessages(hashParams, messages);
 
     // Also, when using OpenId auth, the IdP can return with success. However, in the "authorization code" flow,
     // the Kiali backend still needs to do some extra negotiation with the IdP, which can fail.
     // The backend will set an "openid_error" url parameter when there is some failure.
+    // Only log the openid_error since we cannot guarantee it is not spoofed. We only show a generic error message in the UI.
     if (urlParams.get('openid_error')) {
+      console.warn(`Authentication openid_error: ${urlParams.get('openid_error')}`)
       messages.push(
-        this.renderMessage(`Authentication failed: ${urlParams.get('openid_error')}`, 'danger', 'openid-err')
+        this.renderMessage(`OpenID authentication failed.`, 'danger', 'openid-err')
       );
     }
 
@@ -183,6 +186,17 @@ export class LoginPage extends React.Component<LoginProps, LoginState> {
     const messages = this.getHelperMessage();
     const isLoggingIn = this.props.isPostLoginPerforming || this.props.status === LoginStatus.logging;
     const isLoginButtonDisabled = isLoggingIn || this.props.status === LoginStatus.loggedIn;
+    let isHash = false;
+    // Same conditions as in AuthenticationController
+    if (isAuthStrategyOAuth()) {
+      const pattern = /[#&](access_token|id_token)=/;
+      isHash = pattern.test(window.location.hash);
+    }
+
+    if ((authenticationConfig.strategy === AuthStrategy.openshift|| authenticationConfig.strategy === AuthStrategy.openid)
+      && !isHash && this.props.status === LoginStatus.loggedOut && messages.length === 0 && (this.props.message ?? '').length === 0) {
+      window.location.href = authenticationConfig.authorizationEndpoint!;
+    }
 
     const listItem = (
       <>
@@ -198,7 +212,7 @@ export class LoginPage extends React.Component<LoginProps, LoginState> {
     let loginPane: React.ReactFragment;
     if (authenticationConfig.strategy === AuthStrategy.token) {
       loginPane = (
-        <Form>
+        <Form data-test="login-form">
           <FormHelperText
             isError={!this.state.isValidToken || this.props.status === LoginStatus.error}
             isHidden={!this.state.showHelperText && this.props.message === '' && messages.length === 0}
@@ -214,7 +228,7 @@ export class LoginPage extends React.Component<LoginProps, LoginState> {
               onClick={this.handleSubmit}
               isDisabled={isLoginButtonDisabled}
               style={{ width: '100%' }}
-              variant="primary"
+              variant={ButtonVariant.primary}
             >
               Log In
             </Button>
@@ -223,7 +237,7 @@ export class LoginPage extends React.Component<LoginProps, LoginState> {
       );
     } else {
       loginPane = (
-        <Form>
+        <Form data-test="login-form">
           <FormHelperText
             isError={this.props.status === LoginStatus.error}
             isHidden={this.props.status !== LoginStatus.error && this.props.message === '' && messages.length === 0}
@@ -231,7 +245,7 @@ export class LoginPage extends React.Component<LoginProps, LoginState> {
             {messages}
           </FormHelperText>
           <ActionGroup>
-            <Button type="submit" onClick={this.handleSubmit} style={{ width: '100%' }} variant="primary">
+            <Button type="submit" onClick={this.handleSubmit} style={{ width: '100%' }} variant={ButtonVariant.primary}>
               {loginLabel}
             </Button>
           </ActionGroup>
@@ -259,7 +273,7 @@ const mapStateToProps = (state: KialiAppState) => ({
   message: state.authentication.message
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
   authenticate: (username: string, password: string) => dispatch(LoginThunkActions.authenticate(username, password))
 });
 

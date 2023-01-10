@@ -20,10 +20,18 @@ infomsg() {
   echo -e "\U0001F4C4 ${1}"
 }
 
-# FUNCTION: is_cluster_deployed - returns 'true' if the cluster is in the state of "deployed"
+# FUNCTION: is_cluster_deployed - returns 'true' if the cluster is in the state of "deployed and ingress is healthy"
 is_cluster_deployed() {
   local state="$(ibmcloud oc cluster get --cluster ${CLUSTER_NAME} --output json | jq -r '.lifecycle.masterState')"
-  [ "${state}" == "deployed" ] && echo "true" || echo "false"
+  if [ "${state}" == "deployed" ]; then
+    # Only try to get the ingress status after the cluster is online.
+    local ingress_state="$(ibmcloud ks ingress status --cluster ${CLUSTER_NAME} --output json | jq -r '.status')"
+    if [ "${ingress_state}" == "healthy" ]; then
+      echo "true"
+      return
+    fi
+  fi
+  echo "false"
 }
 
 # FUNCTION: create - Creates the main resources if they do not yet exist
@@ -65,6 +73,7 @@ create() {
   fi
 
   # CLUSTER
+  infomsg "COS ID: ${cos_id}"
   if ! ibmcloud oc cluster create vpc-gen2 --name ${CLUSTER_NAME} --zone ${ZONE_NAME} --version ${OPENSHIFT_VERSION} --flavor ${WORKER_FLAVOR} --workers ${WORKER_NODES} --vpc-id ${vpc_id} --subnet-id ${sn_id} --cos-instance ${cos_id} ; then
     errormsg "Failed to create OpenShift [${OPENSHIFT_VERSION}] cluster [${CLUSTER_NAME}] in zone [${ZONE_NAME}]."
   else
@@ -113,7 +122,14 @@ status() {
   infomsg "Subnet:"               && ibmcloud is subnet ${SUBNET_NAME}
   infomsg "Cloud Object Storage:" && ibmcloud resource service-instance ${CLOUD_OBJECT_STORAGE_NAME}
   infomsg "Cluster:"              && ibmcloud oc cluster get --cluster ${CLUSTER_NAME}
+  infomsg "Ingress:"              && ibmcloud ks ingress status --cluster ${CLUSTER_NAME}
   [ "$(is_cluster_deployed)" == "true" ] && infomsg "Cluster is deployed" || infomsg "Cluster is NOT deployed!"
+}
+
+# FUNCTION: set_admin - Grants to the user full admin rights on the cluster.
+set_admin() {
+  infomsg "Adding you as a cluster admin user"
+  ibmcloud oc cluster config --cluster ${CLUSTER_NAME} --admin
 }
 
 # FUNCTION: finish - Waits for the cluster to be deployed and then finishes the deployment.
@@ -125,8 +141,7 @@ finish() {
   done
   echo "Deployed."
 
-  infomsg "Adding you as a cluster admin user"
-  ibmcloud oc cluster config --cluster ${CLUSTER_NAME} --admin
+  set_admin
 
   infomsg "The cluster is ready!"
 }
@@ -166,6 +181,7 @@ while [[ $# -gt 0 ]]; do
     status) _CMD="status"; shift ;;
     finish) _CMD="finish"; shift ;;
     apikey) _CMD="apikey"; shift ;;
+    admin)  _CMD="admin";  shift ;;
 
     # OPTIONS
 
@@ -227,6 +243,7 @@ Commands:
    apikey: Creates an apikey.txt file in the current directory that contains a new IBM API key that you can use to log into the cluster.
            For more details on this, see: https://cloud.ibm.com/docs/openshift?topic=openshift-access_cluster#access_api_key
            You can view the API keys you have created, and you can delete the keys, from here: https://cloud.ibm.com/iam/apikeys
+   admin:  Configures the current user invoking the command to be granted admin rights on the cluster.
 HELPMSG
       exit 1
       ;;
@@ -339,6 +356,8 @@ elif [ "$_CMD" = "finish" ]; then
   finish
 elif [ "$_CMD" = "apikey" ]; then
   create_apikey
+elif [ "$_CMD" = "admin" ]; then
+  set_admin
 else
   errormsg "Invalid command."
 fi

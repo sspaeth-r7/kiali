@@ -7,7 +7,8 @@ import {
   ChartProps,
   ChartTooltipProps,
   ChartLabel,
-  ChartLegend
+  ChartLegend,
+  ChartLine
 } from '@patternfly/react-charts';
 import { VictoryBoxPlot, VictoryPortal } from 'victory';
 import { format as d3Format } from 'd3-format';
@@ -39,12 +40,17 @@ type Props<T extends RichDataPoint, O extends LineInfo> = {
   sizeRatio?: number;
   moreChartProps?: ChartProps;
   onClick?: (datum: RawOrBucket<O>) => void;
+  onTooltipClose?: (datum: RawOrBucket<O>) => void;
+  onTooltipOpen?: (datum: RawOrBucket<O>) => void;
   brushHandlers?: BrushHandlers;
   overlay?: Overlay<O>;
   timeWindow?: [Date, Date];
   unit: string;
   xAxis?: XAxisType;
   labelComponent?: React.ReactElement<ChartTooltipProps>;
+  // The JaegerScatter component needs a flag to indicate that the trace datapoint needs a mouse pointer
+  // It could be detected indirectly, but it's complicated and less clear, a new optional flag simplifies this logic
+  pointer?: boolean;
 };
 
 type State = {
@@ -111,16 +117,22 @@ class ChartWithLegend<T extends RichDataPoint, O extends LineInfo> extends React
     window.removeEventListener('resize', this.handleResize);
   }
 
+  private onTooltipClose = () => {
+    if (this.props.onTooltipClose) {
+      this.props.onTooltipClose(this.hoveredItem as RawOrBucket<O>);
+    }
+    this.hoveredItem = undefined;
+  };
+
   private onTooltipOpen = (points?: VCDataPoint[]) => {
     if (points && points.length > 0) {
       this.hoveredItem = points[0];
     } else {
       this.hoveredItem = undefined;
     }
-  };
-
-  private onTooltipClose = () => {
-    this.hoveredItem = undefined;
+    if (this.props.onTooltipOpen) {
+      this.props.onTooltipOpen(this.hoveredItem as RawOrBucket<O>);
+    }
   };
 
   private onShowMoreLegend = () => {
@@ -214,8 +226,11 @@ class ChartWithLegend<T extends RichDataPoint, O extends LineInfo> extends React
             () => this.mouseOnLegend
           )}
           scale={{ x: this.props.xAxis === 'series' ? 'linear' : 'time' }}
-          // Hack: 1 pxl on Y domain padding to prevent harsh clipping (https://github.com/kiali/kiali/issues/2069)
-          domainPadding={{ y: 1, x: this.props.xAxis === 'series' ? 50 : undefined }}
+          // Hack: Need at least 1 pxl on Y domain padding to prevent harsh clipping (https://github.com/kiali/kiali/issues/2069)
+          // Hack: Chart points on the very edges are not clickable due to extra padding and the chart
+          // not resizing correctly for some reason. The additional domain padding squeezes the elements
+          // into the chart so that they are no longer on the edges (https://github.com/kiali/kiali/issues/5222).
+          domainPadding={{ y: 10, x: this.props.xAxis === 'series' ? 50 : 15 }}
           {...this.props.moreChartProps}
         >
           {
@@ -237,11 +252,7 @@ class ChartWithLegend<T extends RichDataPoint, O extends LineInfo> extends React
                 }}
               />
             ) : (
-              <ChartAxis
-                tickCount={scaleInfo.count}
-                style={AxisStyle}
-                domain={this.props.timeWindow}
-              />
+              <ChartAxis tickCount={scaleInfo.count} style={AxisStyle} domain={this.props.timeWindow} />
             )
           }
           <ChartAxis
@@ -423,20 +434,30 @@ class ChartWithLegend<T extends RichDataPoint, O extends LineInfo> extends React
             // serie.datapoints may contain undefined values in certain scenarios i.e. "unknown" values
             if (this.props.showTrendline === true && serie.datapoints[0]) {
               const first_dpx = (serie.datapoints[0].x as Date).getTime() / 1000;
-              const datapoints = serie.datapoints.map(d => [
-                ((d.x as Date).getTime() / 1000 - first_dpx) / 10000,
-                parseFloat(d.y.toString())
-              ]);
+              const datapoints = serie.datapoints.map(d => {
+                let t = ((d.x as Date).getTime() / 1000 - first_dpx) / 10000;
+                let trendPoint = parseFloat(d.y.toString());
+                if (d.y0) {
+                  // If both reporters are enabled, generate the trend line using
+                  // the mean values of both reporters
+                  trendPoint += parseFloat(d.y0.toString());
+                  trendPoint *= 0.5;
+                }
+
+                // Array is [time, y];
+                return [t, trendPoint];
+              });
               const linearRegression = regression.linear(datapoints, { precision: 10 });
 
               let regressionDatapoints = serie.datapoints.map(d => ({
                 ...d,
                 name: d.name + ' (trendline)',
-                y: linearRegression.predict(((d.x as Date).getTime() / 1000 - first_dpx) / 10000)[1]
+                y: linearRegression.predict(((d.x as Date).getTime() / 1000 - first_dpx) / 10000)[1],
+                y0: undefined // Clear y0, in case it is set to prevent the tooltip showing this value.
               }));
 
               const regressionPlot = React.cloneElement(
-                this.props.seriesComponent,
+                <ChartLine />, // Trend lines are always line charts.
                 this.withStyle(
                   {
                     key: 'serie-reg-' + idx,
@@ -492,7 +513,8 @@ class ChartWithLegend<T extends RichDataPoint, O extends LineInfo> extends React
             data: {
               fill: this.props.fill ? color : undefined,
               stroke: this.props.stroke ? color : undefined,
-              strokeDasharray: strokeDasharray === true ? '3 5' : undefined
+              strokeDasharray: strokeDasharray === true ? '3 5' : undefined,
+              cursor: this.props.pointer ? 'pointer' : 'default'
             }
           }
         };

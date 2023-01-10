@@ -11,7 +11,6 @@ import * as AlertUtils from '../../utils/AlertUtils';
 import IstioMetricsContainer from '../../components/Metrics/IstioMetrics';
 import { MetricsObjectTypes } from '../../types/Metrics';
 import CustomMetricsContainer from '../../components/Metrics/CustomMetrics';
-import { RenderHeader } from '../../components/Nav/Page';
 import { DurationInSeconds, TimeInMilliseconds, TimeRange } from '../../types/Common';
 import { KialiAppState } from '../../store/Store';
 import { durationSelector } from '../../store/Selectors';
@@ -21,6 +20,10 @@ import TracesComponent from '../../components/JaegerIntegration/TracesComponent'
 import TrafficDetails from 'components/TrafficList/TrafficDetails';
 import TimeControl from '../../components/Time/TimeControl';
 import { AppHealth } from 'types/Health';
+import RenderHeaderContainer from "../../components/Nav/Page/RenderHeader";
+import {ErrorMsg} from "../../types/ErrorMsg";
+import ErrorSection from "../../components/ErrorSection/ErrorSection";
+import connectRefresh from "../../components/Refresh/connectRefresh";
 
 type AppDetailsState = {
   app?: App;
@@ -28,16 +31,18 @@ type AppDetailsState = {
   // currentTab is needed to (un)mount tab components
   // when the tab is not rendered.
   currentTab: string;
+  error?: ErrorMsg;
 };
 
 type ReduxProps = {
   duration: DurationInSeconds;
   jaegerInfo?: JaegerInfo;
-  lastRefreshAt: TimeInMilliseconds;
   timeRange: TimeRange;
 };
 
-type AppDetailsProps = RouteComponentProps<AppId> & ReduxProps;
+type AppDetailsProps = RouteComponentProps<AppId> & ReduxProps & {
+  lastRefreshAt: TimeInMilliseconds;
+};
 
 const tabName = 'tab';
 const defaultTab = 'info';
@@ -93,7 +98,11 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
           )
         });
       })
-      .catch(error => AlertUtils.addError('Could not fetch App Details.', error));
+      .catch(error => {
+        AlertUtils.addError('Could not fetch App Details.', error)
+        const msg : ErrorMsg = {title: 'No App is selected', description: this.props.match.params.app +" is not found in the mesh"};
+        this.setState({error: msg});
+      });
   };
 
   private runtimeTabs() {
@@ -110,6 +119,7 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
             const tab = (
               <Tab title={dashboard.title} key={'cd-' + dashboard.template} eventKey={tabKey}>
                 <CustomMetricsContainer
+                  lastRefreshAt={this.props.lastRefreshAt}
                   namespace={this.props.match.params.namespace}
                   app={this.props.match.params.app}
                   template={dashboard.template}
@@ -138,6 +148,7 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
         <TrafficDetails
           itemName={this.props.match.params.app}
           itemType={MetricsObjectTypes.APP}
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
         />
       </Tab>
@@ -146,6 +157,8 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
     const inTab = (
       <Tab title="Inbound Metrics" eventKey={2} key={'Inbound Metrics'}>
         <IstioMetricsContainer
+          data-test="inbound-metrics-component"
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
           object={this.props.match.params.app}
           objectType={MetricsObjectTypes.APP}
@@ -157,6 +170,8 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
     const outTab = (
       <Tab title="Outbound Metrics" eventKey={3} key={'Outbound Metrics'}>
         <IstioMetricsContainer
+          data-test="outbound-metrics-component"
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
           object={this.props.match.params.app}
           objectType={MetricsObjectTypes.APP}
@@ -174,6 +189,7 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
         tabsArray.push(
           <Tab eventKey={4} style={{ textAlign: 'center' }} title={'Traces'} key={tracesTabName}>
             <TracesComponent
+              lastRefreshAt={this.props.lastRefreshAt}
               namespace={this.props.match.params.namespace}
               target={this.props.match.params.app}
               targetKind={'app'}
@@ -223,7 +239,10 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
     }
     return (
       <>
-        <RenderHeader location={this.props.location} rightToolbar={<TimeControl customDuration={useCustomTime} />} />
+        <RenderHeaderContainer location={this.props.location} rightToolbar={<TimeControl customDuration={useCustomTime} />} />
+        {this.state.error && (
+          <ErrorSection error={this.state.error} />
+        )}
         {this.state.app && (
           <ParameterizedTabs
             id="basic-tabs"
@@ -247,9 +266,8 @@ class AppDetails extends React.Component<AppDetailsProps, AppDetailsState> {
 
 const mapStateToProps = (state: KialiAppState) => ({
   duration: durationSelector(state),
-  jaegerInfo: state.jaegerState.info,
-  lastRefreshAt: state.globalState.lastRefreshAt
+  jaegerInfo: state.jaegerState.info
 });
 
-const AppDetailsContainer = connect(mapStateToProps)(AppDetails);
+const AppDetailsContainer = connectRefresh(connect(mapStateToProps)(AppDetails));
 export default AppDetailsContainer;

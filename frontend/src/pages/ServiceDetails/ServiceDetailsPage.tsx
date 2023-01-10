@@ -5,7 +5,6 @@ import { Tab } from '@patternfly/react-core';
 
 import ServiceId from '../../types/ServiceId';
 import IstioMetricsContainer from '../../components/Metrics/IstioMetrics';
-import { RenderHeader } from '../../components/Nav/Page';
 import { MetricsObjectTypes } from '../../types/Metrics';
 import { KialiAppState } from '../../store/Store';
 import { DurationInSeconds, TimeInMilliseconds } from '../../types/Common';
@@ -17,17 +16,30 @@ import TrafficDetails from 'components/TrafficList/TrafficDetails';
 import * as API from '../../services/Api';
 import * as AlertUtils from '../../utils/AlertUtils';
 import { PromisesRegistry } from '../../utils/CancelablePromises';
-import { ServiceDetailsInfo } from '../../types/ServiceInfo';
-import { Gateway, PeerAuthentication, Validations } from '../../types/IstioObjects';
+import {getServiceWizardLabel, ServiceDetailsInfo} from '../../types/ServiceInfo';
+import {
+  Gateway,
+  K8sGateway,
+  getGatewaysAsList,
+  PeerAuthentication,
+  Validations,
+  getK8sGatewaysAsList,
+} from '../../types/IstioObjects';
 import ServiceWizardDropdown from '../../components/IstioWizards/ServiceWizardDropdown';
 import TimeControl from '../../components/Time/TimeControl';
+import RenderHeaderContainer from "../../components/Nav/Page/RenderHeader";
+import {ErrorMsg} from "../../types/ErrorMsg";
+import ErrorSection from "../../components/ErrorSection/ErrorSection";
+import connectRefresh from "../../components/Refresh/connectRefresh";
 
 type ServiceDetailsState = {
   currentTab: string;
   gateways: Gateway[];
+  k8sGateways: K8sGateway[];
   serviceDetails?: ServiceDetailsInfo;
   peerAuthentications: PeerAuthentication[];
   validations: Validations;
+  error?: ErrorMsg;
 };
 
 interface ServiceDetailsProps extends RouteComponentProps<ServiceId> {
@@ -55,6 +67,7 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
     this.state = {
       currentTab: activeTab(tabName, defaultTab),
       gateways: [],
+      k8sGateways: [],
       validations: {},
       peerAuthentications: []
     };
@@ -69,6 +82,7 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
     if (
       prevProps.match.params.namespace !== this.props.match.params.namespace ||
       prevProps.match.params.service !== this.props.match.params.service ||
+      currentTab !== this.state.currentTab ||
       prevProps.lastRefreshAt !== this.props.lastRefreshAt
     ) {
       if (currentTab === 'info') {
@@ -83,9 +97,16 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
   private fetchService = () => {
     this.promises.cancelAll();
     this.promises
-      .register('gateways', API.getIstioConfig('', ['gateways'], false, '', ''))
+      .register('gateways', API.getAllIstioConfigs([], ['gateways', 'k8sgateways'], false, '', ''))
       .then(response => {
-        this.setState({ gateways: response.data.gateways });
+        const gws: Gateway[] = [];
+        const k8sGws: K8sGateway[] = [];
+        Object.values(response.data).forEach(item => {
+          gws.push(...item.gateways);
+          k8sGws.push(...item.k8sGateways);
+        });
+        this.setState({ gateways: gws });
+        this.setState({ k8sGateways: k8sGws });
       })
       .catch(gwError => {
         AlertUtils.addError('Could not fetch Gateways list.', gwError);
@@ -100,6 +121,8 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
       })
       .catch(error => {
         AlertUtils.addError('Could not fetch Service Details.', error);
+        const msg : ErrorMsg = {title: 'No Service is selected', description: this.props.match.params.service +" is not found in the mesh"};
+        this.setState({error: msg});
       });
 
     API.getIstioConfig(this.props.match.params.namespace, ['peerauthentications'], false, '', '')
@@ -113,10 +136,6 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
       });
   };
 
-  private getGatewaysAsList(): string[] {
-    return this.state.gateways.map(gateway => gateway.metadata.namespace + '/' + gateway.metadata.name).sort();
-  }
-
   private renderTabs() {
     const overTab = (
       <Tab eventKey={0} title="Overview" key="Overview">
@@ -125,6 +144,7 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
           service={this.props.match.params.service}
           serviceDetails={this.state.serviceDetails}
           gateways={this.state.gateways}
+          k8sGateways={this.state.k8sGateways}
           peerAuthentications={this.state.peerAuthentications}
           validations={this.state.validations}
         />
@@ -135,6 +155,7 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
         <TrafficDetails
           itemName={this.props.match.params.service}
           itemType={MetricsObjectTypes.SERVICE}
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
         />
       </Tab>
@@ -143,6 +164,7 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
     const inTab = (
       <Tab eventKey={2} title="Inbound Metrics" key="Inbound Metrics">
         <IstioMetricsContainer
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
           object={this.props.match.params.service}
           objectType={MetricsObjectTypes.SERVICE}
@@ -157,6 +179,7 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
       tabsArray.push(
         <Tab eventKey={3} title="Traces" key="Traces">
           <TracesComponent
+            lastRefreshAt={this.props.lastRefreshAt}
             namespace={this.props.match.params.namespace}
             target={this.props.match.params.service}
             targetKind={'service'}
@@ -185,11 +208,15 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
         namespace={this.props.match.params.namespace}
         serviceName={this.state.serviceDetails.service.name}
         show={false}
+        readOnly={getServiceWizardLabel(this.state.serviceDetails.service) !== ''}
         workloads={this.state.serviceDetails.workloads || []}
+        subServices={this.state.serviceDetails.subServices || []}
         virtualServices={this.state.serviceDetails.virtualServices}
+        k8sHTTPRoutes={this.state.serviceDetails.k8sHTTPRoutes}
         destinationRules={this.state.serviceDetails.destinationRules}
         istioPermissions={this.state.serviceDetails.istioPermissions}
-        gateways={this.getGatewaysAsList()}
+        gateways={getGatewaysAsList(this.state.gateways)}
+        k8sGateways={getK8sGatewaysAsList(this.state.k8sGateways)}
         peerAuthentications={this.state.peerAuthentications}
         tlsStatus={this.state.serviceDetails.namespaceMTLS}
         onChange={this.fetchService}
@@ -198,25 +225,30 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
 
     return (
       <>
-        <RenderHeader
+        <RenderHeaderContainer
           location={this.props.location}
           rightToolbar={<TimeControl customDuration={useCustomTime} />}
           actionsToolbar={actionsToolbar}
         />
-        <ParameterizedTabs
-          id="basic-tabs"
-          onSelect={tabValue => {
-            this.setState({ currentTab: tabValue });
-          }}
-          tabMap={tabIndex}
-          tabName={tabName}
-          defaultTab={defaultTab}
-          activeTab={this.state.currentTab}
-          mountOnEnter={true}
-          unmountOnExit={true}
-        >
-          {this.renderTabs()}
-        </ParameterizedTabs>
+        {this.state.error && (
+          <ErrorSection error={this.state.error} />
+        )}
+        {!this.state.error && (
+          <ParameterizedTabs
+            id="basic-tabs"
+            onSelect={tabValue => {
+              this.setState({ currentTab: tabValue });
+            }}
+            tabMap={tabIndex}
+            tabName={tabName}
+            defaultTab={defaultTab}
+            activeTab={this.state.currentTab}
+            mountOnEnter={true}
+            unmountOnExit={true}
+          >
+            {this.renderTabs()}
+          </ParameterizedTabs>
+          )}
       </>
     );
   }
@@ -224,8 +256,7 @@ class ServiceDetails extends React.Component<ServiceDetailsProps, ServiceDetails
 
 const mapStateToProps = (state: KialiAppState) => ({
   jaegerInfo: state.jaegerState.info,
-  lastRefreshAt: state.globalState.lastRefreshAt
 });
 
-const ServiceDetailsPageContainer = connect(mapStateToProps)(ServiceDetails);
+const ServiceDetailsPageContainer = connectRefresh( connect(mapStateToProps)(ServiceDetails));
 export default ServiceDetailsPageContainer;

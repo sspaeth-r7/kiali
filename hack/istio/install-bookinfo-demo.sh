@@ -32,6 +32,8 @@ spec:
 EOM
 
   if [ "${AUTO_INJECTION}" == "true" ]; then
+    # let's wait for smmr to be Ready before enabling sidecar injection
+    ${CLIENT_EXE} wait --for condition=Ready -n ${ISTIO_NAMESPACE} smmr/default --timeout 300s
     for d in $(${CLIENT_EXE} get deployments -n ${ns} -o name)
     do
       echo "Enabling sidecar injection for deployment: ${d}"
@@ -50,11 +52,16 @@ RATE=1
 AUTO_INJECTION="true"
 DELETE_BOOKINFO="false"
 MINIKUBE_PROFILE="minikube"
+ARCH="amd64"
 
 # process command line args
 while [[ $# -gt 0 ]]; do
   key="$1"
   case $key in
+    -a|--arch)
+      ARCH="$2"
+      shift;shift
+      ;;
     -ai|--auto-injection)
       AUTO_INJECTION="$2"
       shift;shift
@@ -106,6 +113,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<HELPMSG
 Valid command line arguments:
+  -a|--arch <amd64|ppc64le|s390x>: Images for given arch will be used (default: amd64). Custom bookinfo yaml file provided via '-b' argument is ignored when using different arch than the default.
   -ai|--auto-injection <true|false>: If you want sidecars to be auto-injected or manually injected (default: true).
   -db|--delete-bookinfo <true|false>: If true, uninstall bookinfo. If false, install bookinfo. (default: false).
   -id|--istio-dir <dir>: Where Istio has already been downloaded. If not found, this script aborts.
@@ -113,7 +121,7 @@ Valid command line arguments:
   -c|--client-exe <name>: Cluster client executable name - valid values are "kubectl" or "oc"
   -mp|--minikube-profile <name>: If using minikube, this is the minikube profile name (default: minikube).
   -n|--namespace <name>: Install the demo in this namespace (default: bookinfo)
-  -b|--bookinfo.yaml <file>: A custom yaml file to deploy the bookinfo demo
+  -b|--bookinfo.yaml <file>: A custom yaml file to deploy the bookinfo demo. This is ignored when not using default arch via '-a' argument.
   -g|--gateway.yaml <file>: A custom yaml file to deploy the bookinfo-gateway resources
   --mongo: Install a Mongo DB that a ratings service will access
   --mysql: Install a MySQL DB that a ratings service will access
@@ -178,10 +186,24 @@ fi
 echo "IS_OPENSHIFT=${IS_OPENSHIFT}"
 echo "IS_MAISTRA=${IS_MAISTRA}"
 
+# check arch values and prepare new bookinfo-arch.yaml with matching images
+if [ "${ARCH}" == "ppc64le" ]; then
+  cp ${HACK_SCRIPT_DIR}/kustomization/bookinfo-ppc64le.yaml ${ISTIO_DIR}/samples/bookinfo/platform/kube/kustomization.yaml
+  ${CLIENT_EXE} kustomize ${ISTIO_DIR}/samples/bookinfo/platform/kube --reorder=none > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ppc64le.yaml
+  BOOKINFO_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ppc64le.yaml"
+elif [ "${ARCH}" == "s390x" ]; then
+  cp ${HACK_SCRIPT_DIR}/kustomization/bookinfo-s390x.yaml ${ISTIO_DIR}/samples/bookinfo/platform/kube/kustomization.yaml
+  ${CLIENT_EXE} kustomize ${ISTIO_DIR}/samples/bookinfo/platform/kube --reorder=none > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-s390x.yaml
+  BOOKINFO_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-s390x.yaml"
+elif [ "${ARCH}" != "amd64" ]; then
+  echo "${ARCH} is not supported. Exiting."
+  exit 1
+fi
+
+# use default bookinfo.yaml when there was no custom file provided or different arch selected
 if [ "${BOOKINFO_YAML}" == "" ]; then
   BOOKINFO_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo.yaml"
 fi
-
 if [ "${GATEWAY_YAML}" == "" ]; then
   GATEWAY_YAML="${ISTIO_DIR}/samples/bookinfo/networking/bookinfo-gateway.yaml"
 fi
@@ -213,52 +235,6 @@ else
   $CLIENT_EXE create namespace ${NAMESPACE}
 fi
 
-if [ "${AUTO_INJECTION}" == "true" ]; then
-  $CLIENT_EXE label namespace ${NAMESPACE} "istio-injection=enabled"
-  $CLIENT_EXE apply -n ${NAMESPACE} -f ${BOOKINFO_YAML}
-else
-  $ISTIOCTL kube-inject -f ${BOOKINFO_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
-fi
-
-$CLIENT_EXE apply -n ${NAMESPACE} -f ${GATEWAY_YAML}
-
-if [ "${MONGO_ENABLED}" == "true" ]; then
-  echo "Installing Mongo DB and a ratings service that uses it"
-  MONGO_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-db.yaml"
-  MONGO_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2.yaml"
-
-  if [ "${AUTO_INJECTION}" == "true" ]; then
-    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MONGO_DB_YAML}
-    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MONGO_SERVICE_YAML}
-  else
-    $ISTIOCTL kube-inject -f ${MONGO_DB_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
-    $ISTIOCTL kube-inject -f ${MONGO_SERVICE_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
-  fi
-fi
-
-if [ "${MYSQL_ENABLED}" == "true" ]; then
-  echo "Installing MySql DB and a ratings service that uses it"
-  MYSQL_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-mysql.yaml"
-  MYSQL_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-mysql.yaml"
-
-  if [ "${AUTO_INJECTION}" == "true" ]; then
-    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MYSQL_DB_YAML}
-    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MYSQL_SERVICE_YAML}
-  else
-    $ISTIOCTL kube-inject -f ${MYSQL_DB_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
-    $ISTIOCTL kube-inject -f ${MYSQL_SERVICE_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
-  fi
-fi
-
-if [ "${IS_MAISTRA}" == "true" ]; then
-  prepare_maistra "${NAMESPACE}"
-fi
-
-sleep 4
-
-echo "Bookinfo Demo should be installed and starting up - here are the pods and services"
-$CLIENT_EXE get services -n ${NAMESPACE}
-$CLIENT_EXE get pods -n ${NAMESPACE}
 
 # If OpenShift, we need to do some additional things
 if [ "${IS_OPENSHIFT}" == "true" ]; then
@@ -271,7 +247,7 @@ kind: NetworkAttachmentDefinition
 metadata:
   name: istio-cni
 NAD
-  fi  
+  fi
   cat <<SCC | $CLIENT_EXE apply -f -
 apiVersion: security.openshift.io/v1
 kind: SecurityContextConstraints
@@ -292,6 +268,80 @@ users:
 - "system:serviceaccount:${NAMESPACE}:default"
 SCC
 fi
+
+if [ "${AUTO_INJECTION}" == "true" ]; then
+  $CLIENT_EXE label namespace ${NAMESPACE} "istio-injection=enabled"
+  $CLIENT_EXE apply -n ${NAMESPACE} -f ${BOOKINFO_YAML}
+else
+  $ISTIOCTL kube-inject -f ${BOOKINFO_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
+fi
+
+
+$CLIENT_EXE apply -n ${NAMESPACE} -f ${GATEWAY_YAML}
+
+if [ "${MONGO_ENABLED}" == "true" ]; then
+  echo "Installing Mongo DB and a ratings service that uses it"
+  MONGO_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-db.yaml"
+  MONGO_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2.yaml"
+
+  if [ "${ARCH}" == "ppc64le" ]; then
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-mongodb:2.0.0-ibm-p;g" ${MONGO_DB_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-db-ppc64le.yaml
+    MONGO_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-db-ppc64le.yaml"
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-ratings-v2:2.0.0-ibm-p-mod;g" ${MONGO_SERVICE_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-ppc64le.yaml
+    MONGO_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-ppc64le.yaml"
+  fi
+  if [ "${ARCH}" == "s390x" ]; then
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-mongodb:2.0.0-ibm-z;g" ${MONGO_DB_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-db-s390x.yaml
+    MONGO_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-db-s390x.yaml"
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-ratings-v2:2.0.0-ibm-z;g" ${MONGO_SERVICE_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-s390x.yaml
+    MONGO_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-s390x.yaml"
+  fi
+
+  if [ "${AUTO_INJECTION}" == "true" ]; then
+    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MONGO_DB_YAML}
+    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MONGO_SERVICE_YAML}
+  else
+    $ISTIOCTL kube-inject -f ${MONGO_DB_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
+    $ISTIOCTL kube-inject -f ${MONGO_SERVICE_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
+  fi
+fi
+
+if [ "${MYSQL_ENABLED}" == "true" ]; then
+  echo "Installing MySql DB and a ratings service that uses it"
+  MYSQL_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-mysql.yaml"
+  MYSQL_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-mysql.yaml"
+
+  if [ "${ARCH}" == "ppc64le" ]; then
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-mysqldb:2.0.0-ibm-p;g" ${MYSQL_DB_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-mysql-ppc64le.yaml
+    MYSQL_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-mysql-ppc64le.yaml"
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-ratings-v2:2.0.0-ibm-p;g" ${MYSQL_SERVICE_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-mysql-ppc64le.yaml
+    MYSQL_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-mysql-ppc64le.yaml"
+  fi
+  if [ "${ARCH}" == "s390x" ]; then
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-mysqldb:2.0.0-ibm-z;g" ${MYSQL_DB_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-mysql-s390x.yaml
+    MYSQL_DB_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-mysql-s390x.yaml"
+    sed  "s;docker.io/istio.*;quay.io/maistra/examples-bookinfo-ratings-v2:2.0.0-ibm-z;g" ${MYSQL_SERVICE_YAML} > ${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-mysql-s390x.yaml
+    MYSQL_SERVICE_YAML="${ISTIO_DIR}/samples/bookinfo/platform/kube/bookinfo-ratings-v2-mysql-s390x.yaml"
+  fi
+
+  if [ "${AUTO_INJECTION}" == "true" ]; then
+    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MYSQL_DB_YAML}
+    $CLIENT_EXE apply -n ${NAMESPACE} -f ${MYSQL_SERVICE_YAML}
+  else
+    $ISTIOCTL kube-inject -f ${MYSQL_DB_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
+    $ISTIOCTL kube-inject -f ${MYSQL_SERVICE_YAML} | $CLIENT_EXE apply -n ${NAMESPACE} -f -
+  fi
+fi
+
+if [ "${IS_MAISTRA}" == "true" ]; then
+  prepare_maistra "${NAMESPACE}"
+fi
+
+sleep 4
+
+echo "Bookinfo Demo should be installed and starting up - here are the pods and services"
+$CLIENT_EXE get services -n ${NAMESPACE}
+$CLIENT_EXE get pods -n ${NAMESPACE}
 
 if [ "${TRAFFIC_GENERATOR_ENABLED}" == "true" ]; then
   echo "Installing Traffic Generator"
@@ -320,8 +370,18 @@ if [ "${TRAFFIC_GENERATOR_ENABLED}" == "true" ]; then
   fi
 
   if [ "${INGRESS_ROUTE}" != "" ] ; then
+    if [ "${IS_OPENSHIFT}" == "true" ]; then
+      $CLIENT_EXE adm policy add-scc-to-user anyuid -z default -n ${NAMESPACE}
+    fi
     # TODO - these access the "openshift" yaml files - but there are no kubernetes specific versions. using --validate=false
     curl https://raw.githubusercontent.com/kiali/kiali-test-mesh/master/traffic-generator/openshift/traffic-generator-configmap.yaml | DURATION='0s' ROUTE="http://${INGRESS_ROUTE}/productpage" RATE="${RATE}" envsubst | $CLIENT_EXE apply -n ${NAMESPACE} -f -
-    curl https://raw.githubusercontent.com/kiali/kiali-test-mesh/master/traffic-generator/openshift/traffic-generator.yaml | $CLIENT_EXE apply --validate=false -n ${NAMESPACE} -f -
+    url="https://raw.githubusercontent.com/kiali/kiali-test-mesh/master/traffic-generator/openshift/traffic-generator.yaml"
+    if [ "${ARCH}" == "ppc64le" ]; then
+      curl ${url} | sed 's;quay.io/kiali.*;quay.io/maistra/kiali-test-mesh-traffic-generator:0.0-ibm-p;g' | $CLIENT_EXE apply --validate=false -n ${NAMESPACE} -f -
+    elif [ "${ARCH}" == "s390x" ]; then
+      curl ${url} | sed 's;quay.io/kiali.*;quay.io/maistra/kiali-test-mesh-traffic-generator:0.0-ibm-z;g' | $CLIENT_EXE apply --validate=false -n ${NAMESPACE} -f -
+    else
+      curl ${url} | $CLIENT_EXE apply --validate=false -n ${NAMESPACE} -f -
+    fi
   fi
 fi

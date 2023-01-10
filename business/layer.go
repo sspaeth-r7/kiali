@@ -14,7 +14,9 @@ import (
 	"github.com/kiali/kiali/prometheus"
 )
 
-// Layer is a container for fast access to inner services
+// Layer is a container for fast access to inner services.
+// A business layer is created per token/user. Any data that
+// needs to be saved across layers is saved in the Kiali Cache.
 type Layer struct {
 	App            AppService
 	Health         HealthService
@@ -38,35 +40,64 @@ type Layer struct {
 
 // Global clientfactory and prometheus clients.
 var clientFactory kubernetes.ClientFactory
-var jaegerClient jaeger.ClientInterface
-var prometheusClient prometheus.ClientInterface
-var once sync.Once
-var kialiCache cache.KialiCache
 
+var (
+	jaegerClient     jaeger.ClientInterface
+	kialiCache       cache.KialiCache
+	once             sync.Once
+	prometheusClient prometheus.ClientInterface
+)
+
+// sets the global kiali cache var.
 func initKialiCache() {
-	if config.Get().KubernetesConfig.CacheEnabled {
-		log.Infof("Initializing Kiali Cache")
-		if cache, err := cache.NewKialiCache(); err != nil {
-			log.Errorf("Error initializing Kiali Cache. Details: %s", err)
-		} else {
-			// Temporal NamespaceService to initialize the cache informers
-			initK8sClient := cache.GetClient()
-			initNamespaceService := NewNamespaceService(initK8sClient)
-			if nss, err := initNamespaceService.GetNamespaces(context.Background()); err != nil {
-				log.Errorf("Error fetching initial namespaces for populating the Kiali Cache. Details: %s", err)
-			} else {
-				for _, ns := range nss {
-					cache.CheckNamespace(ns.Name)
-				}
-			}
-			kialiCache = cache
-		}
-	}
 	if excludedWorkloads == nil {
 		excludedWorkloads = make(map[string]bool)
 		for _, w := range config.Get().KubernetesConfig.ExcludeWorkloads {
 			excludedWorkloads[w] = true
 		}
+	}
+
+	// TODO: Remove conditonal once cache is fully mandatory.
+	if config.Get().KubernetesConfig.CacheEnabled {
+		log.Infof("Initializing Kiali Cache")
+
+		// Initial list of namespaces to seed the cache with.
+		// This is only necessary if the cache is namespace-scoped.
+		// For a cluster-scoped cache, all namespaces are accessible.
+		// TODO: This is leaking cluster-scoped vs. namespace-scoped in a way.
+		var namespaceSeedList []string
+		if !config.Get().AllNamespacesAccessible() {
+			cfg, err := kubernetes.ConfigClient()
+			if err != nil {
+				log.Errorf("Failed to initialize Kiali Cache. Unable to create Kube rest config. Err: %s", err)
+				return
+			}
+
+			kubeClient, err := kubernetes.NewClientFromConfig(cfg)
+			if err != nil {
+				log.Errorf("Failed to initialize Kiali Cache. Unable to create Kube client. Err: %s", err)
+				return
+			}
+
+			initNamespaceService := NewNamespaceService(kubeClient)
+			nss, err := initNamespaceService.GetNamespaces(context.Background())
+			if err != nil {
+				log.Errorf("Error fetching initial namespaces for populating the Kiali Cache. Details: %s", err)
+				return
+			}
+
+			for _, ns := range nss {
+				namespaceSeedList = append(namespaceSeedList, ns.Name)
+			}
+		}
+
+		cache, err := cache.NewKialiCache(namespaceSeedList...)
+		if err != nil {
+			log.Errorf("Error initializing Kiali Cache. Details: %s", err)
+			return
+		}
+
+		kialiCache = cache
 	}
 }
 
@@ -84,7 +115,7 @@ func IsResourceCached(namespace string, resource string) bool {
 }
 
 func Start() {
-	// Kiali Cache will be initialized once at first use of Business layer
+	// Kiali Cache will be initialized once at start up.
 	once.Do(initKialiCache)
 }
 
@@ -158,7 +189,18 @@ func NewWithBackends(k8s kubernetes.ClientInterface, prom prometheus.ClientInter
 	temporaryLayer.TLS = TLSService{k8s: k8s, businessLayer: temporaryLayer}
 	temporaryLayer.TokenReview = NewTokenReview(k8s)
 	temporaryLayer.Validations = IstioValidationsService{k8s: k8s, businessLayer: temporaryLayer}
-	temporaryLayer.Workload = WorkloadService{k8s: k8s, prom: prom, businessLayer: temporaryLayer}
+	// TODO: Remove conditional once cache is fully mandatory.
+	if config.Get().KubernetesConfig.CacheEnabled {
+		// The caching client effectively uses two different SA account tokens.
+		// The kiali SA token is used for all cache methods. The cache methods are
+		// read-only. Methods that are not cached and methods that modify objects
+		// use the user's token through the normal client.
+		// TODO: Always pass caching client once caching is mandatory.
+		cachingClient := cache.NewCachingClient(kialiCache, k8s)
+		temporaryLayer.Workload = *NewWorkloadService(cachingClient, prom, kialiCache, temporaryLayer, config.Get())
+	} else {
+		temporaryLayer.Workload = *NewWorkloadService(k8s, prom, kialiCache, temporaryLayer, config.Get())
+	}
 
 	return temporaryLayer
 }

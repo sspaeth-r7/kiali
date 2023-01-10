@@ -79,7 +79,7 @@ class HelpDropdownContainer extends React.Component<HelpDropdownProps, HelpDropd
         toggleIndicator={null}
         onToggle={this.onDropdownToggle}
         aria-label="Help"
-        style={{ marginTop: 3 }}
+        style={{ marginTop: 3, verticalAlign: "-0.1em" }}
       >
         <QuestionCircleIcon />
       </DropdownToggle>
@@ -94,7 +94,7 @@ class HelpDropdownContainer extends React.Component<HelpDropdownProps, HelpDropd
     );
 
     items.push(
-      <DropdownItem component={'span'} key={'view_debug_info'} onClick={this.openDebugInformation}>
+      <DropdownItem component={'span'} key={'view_debug_info'} onClick={this.openDebugInformation} style={{ cursor: 'pointer' }}>
         View Debug Info
       </DropdownItem>
     );
@@ -115,12 +115,17 @@ class HelpDropdownContainer extends React.Component<HelpDropdownProps, HelpDropd
 
     return (
       <>
-        <AboutUIModal ref={this.about} status={this.props.status} externalServices={this.props.externalServices} />
+        <AboutUIModal
+          ref={this.about}
+          status={this.props.status}
+          externalServices={this.props.externalServices}
+          warningMessages={this.props.warningMessages} />
         <DebugInformationContainer ref={this.debugInformation} />
         {serverConfig.kialiFeatureFlags.certificatesInformationIndicators.enabled && (
           <IstioCertsInfoConnected ref={this.certsInformation} />
         )}
         <Dropdown
+          data-test="about-help-button"
           isPlain={true}
           position="right"
           onSelect={this.onDropdownSelect}

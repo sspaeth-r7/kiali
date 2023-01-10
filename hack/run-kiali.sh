@@ -75,6 +75,8 @@ DEFAULT_API_PROXY_PORT="8001"
 DEFAULT_CLIENT_EXE="kubectl"
 DEFAULT_ENABLE_SERVER="true"
 DEFAULT_ISTIO_NAMESPACE="istio-system"
+DEFAULT_ISTIOD_URL="http://127.0.0.1:15014/version"
+DEFAULT_ISTIOD_SERVICE_NAME="istiod"
 DEFAULT_KIALI_CONFIG_TEMPLATE_FILE="${SCRIPT_DIR}/run-kiali-config-template.yaml"
 DEFAULT_KIALI_EXE="${GOPATH:-.}/bin/kiali"
 DEFAULT_KUBE_CONTEXT="kiali-developer"
@@ -97,6 +99,8 @@ while [[ $# -gt 0 ]]; do
     -es|--enable-server)         ENABLE_SERVER="$2";                 shift;shift ;;
     -gu|--grafana-url)           GRAFANA_URL="$2";                   shift;shift ;;
     -in|--istio-namespace)       ISTIO_NAMESPACE="$2";               shift;shift ;;
+    -isn|--istiod-service-name)  ISTIOD_SERVICE_NAME="$2";           shift;shift ;;
+    -iu|--istiod-url)            ISTIOD_URL="$2";                    shift;shift ;;
     -kah|--kubernetes-api-host)  KUBERNETES_API_HOST="$2";           shift;shift ;;
     -kap|--kubernetes-api-port)  KUBERNETES_API_PORT="$2";           shift;shift ;;
     -kc|--kube-context)          KUBE_CONTEXT="$2";                  shift;shift ;;
@@ -151,6 +155,13 @@ Valid options:
   -in|--istio-namespace
       The name of the control plane namespace - this is where Istio components are installed.
       Default: ${DEFAULT_ISTIO_NAMESPACE}
+  -isn|--istiod-service-name
+      The name of the istiod service.
+      This is used in conjunction with the istiod URL in order to port forward to istiod.
+      Default: ${DEFAULT_ISTIOD_SERVICE_NAME}
+  -iu|--istiod-url
+      The URL of the istiod endpoint.
+      Default: ${DEFAULT_ISTIOD_URL}
   -kah|--kubernetes-api-host
       The hostname of the Kubernetes API Endpoint.
       Default: <will be auto-discovered>
@@ -160,7 +171,7 @@ Valid options:
   -kc|--kube-context
       The context used to connect to the cluster. This is a context that will be
       created/modified in order to proxy the requests to the API server.
-      This context will be associatd with the Kiali service account.
+      This context will be associated with the Kiali service account.
       After it is created, you will be able to inspect this context and its
       related information via "kubectl config" while the server is running,
       but it will be deleted when this script exits and you will return back to
@@ -249,6 +260,9 @@ TMP_ROOT_DIR="${TMP_ROOT_DIR:-${DEFAULT_TMP_ROOT_DIR}}"
 KUBERNETES_SERVICE_HOST="${API_PROXY_HOST}"
 KUBERNETES_SERVICE_PORT="${API_PROXY_PORT}"
 
+# this is the secret we will manage if we need to set up our own context
+SERVICE_ACCOUNT_SECRET_NAME="runkiali-secret"
+
 # This is a directory where we write temp files needed to run Kiali locally
 
 TMP_DIR="${TMP_ROOT_DIR}/run-kiali"
@@ -279,6 +293,13 @@ else
   IS_OPENSHIFT="false"
   infomsg "You are connecting to a (non-OpenShift) Kubernetes cluster"
 fi
+
+# Port forward data for Istiod, used for the Istiod URL
+ISTIOD_SERVICE_NAME="${ISTIOD_SERVICE_NAME:-${DEFAULT_ISTIOD_SERVICE_NAME}}"
+PORT_FORWARD_SERVICE_ISTIOD="service/${ISTIOD_SERVICE_NAME}"
+LOCAL_REMOTE_PORTS_ISTIOD="15014:15014"
+ISTIOD_URL="${ISTIOD_URL:-${DEFAULT_ISTIOD_URL}}"
+
 
 # If the user didn't tell us what the Prometheus URL is, try to auto-discover it
 
@@ -477,6 +498,7 @@ echo "CLIENT_EXE=$CLIENT_EXE"
 echo "ENABLE_SERVER=$ENABLE_SERVER"
 echo "GRAFANA_URL=$GRAFANA_URL"
 echo "ISTIO_NAMESPACE=$ISTIO_NAMESPACE"
+echo "ISTIOD_URL=$ISTIOD_URL"
 echo "KIALI_CONFIG_TEMPLATE_FILE=$KIALI_CONFIG_TEMPLATE_FILE"
 echo "KIALI_EXE=$KIALI_EXE"
 echo "KUBE_CONTEXT=$KUBE_CONTEXT"
@@ -512,6 +534,7 @@ if ! echo "${LOG_LEVEL}" | grep -qiE "^(trace|debug|info|warn|error|fatal)$"; th
 KIALI_CONFIG_FILE="${TMP_DIR}/run-kiali-config.yaml"
 cat ${KIALI_CONFIG_TEMPLATE_FILE} | \
   ISTIO_NAMESPACE=${ISTIO_NAMESPACE} \
+  ISTIOD_URL=${ISTIOD_URL} \
   PROMETHEUS_URL=${PROMETHEUS_URL} \
   GRAFANA_URL=${GRAFANA_URL} \
   TRACING_URL=${TRACING_URL} \
@@ -545,12 +568,29 @@ else
   CA_FILE="${TMP_SECRETS_DIR}/ca.crt"
 
   infomsg "Attempting to obtain the service account token and certificates..."
-  SERVICE_ACCOUNT_NAME="$(${CLIENT_EXE} -n ${ISTIO_NAMESPACE} get sa -l app=kiali -o name)"
+  SERVICE_ACCOUNT_NAME="$(${CLIENT_EXE} -n ${ISTIO_NAMESPACE} get sa -l app.kubernetes.io/name=kiali -o jsonpath={.items[0].metadata.name})"
   if [ -z "${SERVICE_ACCOUNT_NAME}" ]; then
     errormsg "Cannot get the service account name. Kiali must be deployed in [${ISTIO_NAMESPACE}]. If you do not want to deploy Kiali in the cluster, use '--kube-context current'"
     exit 1
   fi
-  SERVICE_ACCOUNT_SECRET_NAME="$(${CLIENT_EXE} -n ${ISTIO_NAMESPACE} get ${SERVICE_ACCOUNT_NAME} -o jsonpath='{.secrets[0].name}')"
+
+  # Newer k8s/OpenShift clusters no longer provide secrets for SAs - so manually create a secret that will contain the certs/token
+  cat <<EOM | ${CLIENT_EXE} apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${SERVICE_ACCOUNT_SECRET_NAME}
+  namespace: ${ISTIO_NAMESPACE}
+  annotations:
+    kubernetes.io/service-account.name: ${SERVICE_ACCOUNT_NAME}
+type: kubernetes.io/service-account-token
+EOM
+
+  wait_for_secret=1
+  until [ $wait_for_secret -eq 5 ] || [ "$(${CLIENT_EXE} -n ${ISTIO_NAMESPACE} get secret ${SERVICE_ACCOUNT_SECRET_NAME} -o jsonpath="{.data.token}" 2> /dev/null)" != "" ] ; do
+    sleep $(( wait_for_secret++ ))
+  done
+
   ${CLIENT_EXE} -n ${ISTIO_NAMESPACE} get secret ${SERVICE_ACCOUNT_SECRET_NAME} -o jsonpath="{.data.token}" | base64 --decode > "${TOKEN_FILE}"
   ${CLIENT_EXE} -n ${ISTIO_NAMESPACE} get secret ${SERVICE_ACCOUNT_SECRET_NAME} -o jsonpath="{.data['ca\.crt']}" | base64 --decode > "${CA_FILE}"
   if [ ! -s "${TOKEN_FILE}"  ]; then errormsg "Cannot obtain the Kiali service account token"; exit 1; fi
@@ -632,6 +672,14 @@ kill_port_forward_component() {
     killmsg "The port-forward to ${COMPONENT_NAME} has been killed"
     printf -v "${PORT_FORWARD_JOB_VARNAME}" ""
   fi
+}
+
+start_port_forward_istiod() {
+  start_port_forward_component 'Istiod' 'PORT_FORWARD_JOB_ISTIOD' "${PORT_FORWARD_SERVICE_ISTIOD}" "${LOCAL_REMOTE_PORTS_ISTIOD}" "${ISTIOD_URL}" '--istiod-url'
+}
+
+kill_port_forward_istiod() {
+  kill_port_forward_component 'Istiod' 'PORT_FORWARD_JOB_ISTIOD'
 }
 
 start_port_forward_prometheus() {
@@ -722,6 +770,7 @@ ask_to_restart_or_exit() {
 cleanup_and_exit() {
   kill_server
   kill_proxy
+  kill_port_forward_istiod
   kill_port_forward_prometheus
   kill_port_forward_grafana
   kill_port_forward_tracing
@@ -739,6 +788,8 @@ restore_original_context() {
     ${CLIENT_EXE} config delete-cluster ${KUBE_CONTEXT}
     ${CLIENT_EXE} config delete-user ${KUBE_CONTEXT}
     ${CLIENT_EXE} config delete-context ${KUBE_CONTEXT}
+    infomsg "Removing the custom sa secret [${SERVICE_ACCOUNT_SECRET_NAME}] from namespace [${ISTIO_NAMESPACE}]"
+    ${CLIENT_EXE} delete secret -n ${ISTIO_NAMESPACE} ${SERVICE_ACCOUNT_SECRET_NAME}
   fi
 }
 
@@ -749,6 +800,7 @@ else
   infomsg "The server is not rebootable. You can kill this script via either [kill $$] or [kill -USR1 $$]"
 fi
 
+start_port_forward_istiod
 start_port_forward_prometheus
 start_port_forward_grafana
 start_port_forward_tracing

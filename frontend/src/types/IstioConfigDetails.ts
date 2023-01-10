@@ -4,6 +4,8 @@ import {
   AuthorizationPolicy,
   DestinationRule,
   Gateway,
+  K8sGateway,
+  K8sHTTPRoute,
   ServiceEntry,
   VirtualService,
   ObjectValidation,
@@ -15,7 +17,7 @@ import {
   EnvoyFilter,
   WorkloadGroup,
   References,
-  HelpMessage
+  HelpMessage, WasmPlugin, Telemetry
 } from './IstioObjects';
 import { AceOptions } from 'react-ace/types';
 
@@ -28,6 +30,8 @@ export interface IstioConfigId {
 export interface IstioConfigDetails {
   namespace: Namespace;
   gateway: Gateway;
+  k8sGateway: K8sGateway;
+  k8sHTTPRoute: K8sHTTPRoute;
   virtualService: VirtualService;
   destinationRule: DestinationRule;
   serviceEntry: ServiceEntry;
@@ -35,6 +39,8 @@ export interface IstioConfigDetails {
   workloadEntry: WorkloadEntry;
   workloadGroup: WorkloadGroup;
   envoyFilter: EnvoyFilter;
+  wasmPlugin: WasmPlugin;
+  telemetry: Telemetry;
   authorizationPolicy: AuthorizationPolicy;
   peerAuthentication: PeerAuthentication;
   requestAuthentication: RequestAuthentication;

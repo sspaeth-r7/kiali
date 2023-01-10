@@ -33,6 +33,9 @@ type IstioValidationSummary struct {
 	Warnings int `json:"warnings"`
 }
 
+// ValidationSummaries holds a map of IstioValidationSummary per namespace
+type ValidationSummaries map[string]*IstioValidationSummary
+
 // IstioValidations represents a set of IstioValidation grouped by IstioValidationKey.
 type IstioValidations map[IstioValidationKey]*IstioValidation
 
@@ -109,6 +112,10 @@ var ObjectTypeSingular = map[string]string{
 	"peerauthentications":    "peerauthentication",
 	"requestauthentications": "requestauthentication",
 	"workloads":              "workload",
+	"wasmplugins":            "wasmpluin",
+	"telemetries":            "telemetry",
+	"k8shttproutes":          "k8shttproute",
+	"k8sgateways":            "k8sgateway",
 }
 
 var checkDescriptors = map[string]IstioCheck{
@@ -212,6 +219,11 @@ var checkDescriptors = map[string]IstioCheck{
 		Message:  "No matching workload found for the selector in this namespace",
 		Severity: WarningSeverity,
 	},
+	"k8shttproutes.nok8sgateway": {
+		Code:     "KIA1401",
+		Message:  "HTTPRoute is pointing to a non-existent K8s gateway",
+		Severity: ErrorSeverity,
+	},
 	"peerauthentication.mtls.destinationrulemissing": {
 		Code:     "KIA0401",
 		Message:  "Mesh-wide Destination Rule enabling mTLS is missing",
@@ -252,26 +264,6 @@ var checkDescriptors = map[string]IstioCheck{
 		Message:  "Missing one or more addresses from matching WorkloadEntries",
 		Severity: WarningSeverity,
 	},
-	"servicerole.invalid.services": {
-		Code:     "KIA0901",
-		Message:  "Unable to find all the defined services",
-		Severity: ErrorSeverity,
-	},
-	"servicerole.invalid.namespace": {
-		Code:     "KIA0902",
-		Message:  "ServiceRole can only point to current namespace",
-		Severity: ErrorSeverity,
-	},
-	"servicerolebinding.invalid.role": {
-		Code:     "KIA0903",
-		Message:  "ServiceRole does not exists in this namespace",
-		Severity: ErrorSeverity,
-	},
-	"sidecar.egress.invalidhostformat": {
-		Code:     "KIA1003",
-		Message:  "Invalid host format. 'namespace/dnsName' format expected",
-		Severity: ErrorSeverity,
-	},
 	"sidecar.egress.servicenotfound": {
 		Code:     "KIA1004",
 		Message:  "This host has no matching entry in the service registry",
@@ -297,11 +289,6 @@ var checkDescriptors = map[string]IstioCheck{
 		Message:  "VirtualService is pointing to a non-existent gateway",
 		Severity: ErrorSeverity,
 	},
-	"virtualservices.nohost.invalidprotocol": {
-		Code:     "KIA1103",
-		Message:  "VirtualService doesn't define any valid route protocol",
-		Severity: ErrorSeverity,
-	},
 	"virtualservices.route.singleweight": {
 		Code:     "KIA1104",
 		Message:  "The weight is assumed to be 100 because there is only one route destination",
@@ -322,14 +309,19 @@ var checkDescriptors = map[string]IstioCheck{
 		Message:  "Subset not found",
 		Severity: WarningSeverity,
 	},
-	"validation.unable.cross-namespace": {
-		Code:     "KIA0001",
-		Message:  "Unable to verify the validity, cross-namespace validation is not supported for this field",
-		Severity: Unknown,
-	},
 	"workload.authorizationpolicy.needstobecovered": {
-		Code:     "KIA1201",
+		Code:     "KIA1301",
 		Message:  "This workload is not covered by any authorization policy",
+		Severity: WarningSeverity,
+	},
+	"k8sgateways.multimatch.listener": {
+		Code:     "KIA1501",
+		Message:  "More than one K8s Gateway for the same host port combination",
+		Severity: WarningSeverity,
+	},
+	"k8sgateways.multimatch.ip": {
+		Code:     "KIA1502",
+		Message:  "More than one K8s Gateway for the same address and type combination",
 		Severity: WarningSeverity,
 	},
 }
@@ -445,14 +437,14 @@ func (iv IstioValidations) MergeReferences(validations IstioValidations) IstioVa
 	return iv
 }
 
-func (iv IstioValidations) SummarizeValidation(ns string) IstioValidationSummary {
+func (iv IstioValidations) SummarizeValidation(ns string) *IstioValidationSummary {
 	ivs := IstioValidationSummary{}
 	for k, v := range iv {
-		if k.Namespace == ns {
+		if k.Namespace == ns && k.ObjectType != "workload" {
 			ivs.mergeSummaries(v.Checks)
 		}
 	}
-	return ivs
+	return &ivs
 }
 
 func (summary *IstioValidationSummary) mergeSummaries(cs []*IstioCheck) {

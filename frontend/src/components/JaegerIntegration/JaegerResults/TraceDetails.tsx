@@ -1,18 +1,16 @@
 import * as React from 'react';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
+import { KialiDispatch } from 'types/Redux';
 import _round from 'lodash/round';
 import { Button, ButtonVariant, Card, CardBody, Grid, GridItem, Tooltip } from '@patternfly/react-core';
 import { InfoAltIcon, WarningTriangleIcon } from '@patternfly/react-icons';
-
 import { JaegerTrace, RichSpanData } from 'types/JaegerInfo';
-import { JaegerTraceTitle } from './JaegerTraceTitle';
+import JaegerTraceTitleContainer from './JaegerTraceTitle';
 import { CytoscapeGraphSelectorBuilder } from 'components/CytoscapeGraph/CytoscapeGraphSelector';
 import { GraphType, NodeType } from 'types/Graph';
 import { FormattedTraceInfo, shortIDStyle } from './FormattedTraceInfo';
 import { PFColors } from 'components/Pf/PfColors';
 import { KialiAppState } from 'store/Store';
-import { KialiAppAction } from 'actions/KialiAppAction';
 import { JaegerThunkActions } from 'actions/JaegerThunkActions';
 import { getTraceId } from 'utils/SearchParamUtils';
 import { average } from 'utils/MathUtils';
@@ -31,21 +29,23 @@ import { renderTraceHeatMap } from './StatsComparison';
 import { HeatMap } from 'components/HeatMap/HeatMap';
 import { formatDuration, sameSpans } from 'utils/tracing/TracingHelper';
 
-interface Props {
-  otherTraces: JaegerTrace[];
+type ReduxProps = {
+  loadMetricsStats: (queries: MetricsStatsQuery[], isCompact: boolean) => void;
+  setTraceId: (traceId?: string) => void;
+};
+
+type Props = ReduxProps & {
+  isStatsMatrixComplete: boolean;
   jaegerURL: string;
   namespace: string;
+  otherTraces: JaegerTrace[];
+  statsMatrix?: StatsMatrix;
   target: string;
   targetKind: TargetKind;
-  setTraceId: (traceId?: string) => void;
   trace?: JaegerTrace;
-  loadMetricsStats: (queries: MetricsStatsQuery[]) => void;
-  statsMatrix?: StatsMatrix;
-  isStatsMatrixComplete: boolean;
-}
+};
 
 interface State {}
-export const heatmapIntervals = ['10m', '60m', '6h'];
 
 class TraceDetails extends React.Component<Props, State> {
   constructor(props: Props) {
@@ -73,8 +73,8 @@ class TraceDetails extends React.Component<Props, State> {
   }
 
   private fetchComparisonMetrics(spans: RichSpanData[]) {
-    const queries = buildQueriesFromSpans(spans);
-    this.props.loadMetricsStats(queries);
+    const queries = buildQueriesFromSpans(spans, false);
+    this.props.loadMetricsStats(queries, false);
   }
 
   private getGraphURL = (traceID: string) => {
@@ -188,7 +188,7 @@ class TraceDetails extends React.Component<Props, State> {
 
     return (
       <Card isCompact style={{ border: '1px solid #e6e6e6' }}>
-        <JaegerTraceTitle
+        <JaegerTraceTitleContainer
           formattedTrace={formattedTrace}
           externalURL={jaegerURL ? `${jaegerURL}/trace/${trace.traceID}` : undefined}
           graphURL={this.getGraphURL(trace.traceID)}
@@ -221,7 +221,7 @@ class TraceDetails extends React.Component<Props, State> {
               {this.props.statsMatrix && (
                 <>
                   <strong>Compared with metrics: </strong>
-                  {renderTraceHeatMap(this.props.statsMatrix, heatmapIntervals, false)}
+                  {renderTraceHeatMap(this.props.statsMatrix, false)}
                   {!this.props.isStatsMatrixComplete && (
                     <>
                       <WarningTriangleIcon /> Incomplete data, check Span Details
@@ -250,11 +250,7 @@ class TraceDetails extends React.Component<Props, State> {
 
 const mapStateToProps = (state: KialiAppState) => {
   if (state.jaegerState.selectedTrace) {
-    const { matrix, isComplete } = reduceMetricsStats(
-      state.jaegerState.selectedTrace,
-      heatmapIntervals,
-      state.metricsStats.data
-    );
+    const { matrix, isComplete } = reduceMetricsStats(state.jaegerState.selectedTrace, state.metricsStats.data, false);
     return {
       trace: state.jaegerState.selectedTrace,
       statsMatrix: matrix,
@@ -267,9 +263,10 @@ const mapStateToProps = (state: KialiAppState) => {
   };
 };
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
   setTraceId: (traceId?: string) => dispatch(JaegerThunkActions.setTraceId(traceId)),
-  loadMetricsStats: (queries: MetricsStatsQuery[]) => dispatch(MetricsStatsThunkActions.load(queries))
+  loadMetricsStats: (queries: MetricsStatsQuery[], isCompact: boolean) =>
+    dispatch(MetricsStatsThunkActions.load(queries, isCompact))
 });
 
 const TraceDetailsContainer = connect(mapStateToProps, mapDispatchToProps)(TraceDetails);

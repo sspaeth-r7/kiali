@@ -1,9 +1,8 @@
 import * as React from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Tooltip, TooltipPosition } from '@patternfly/react-core';
+import { Tooltip, TooltipPosition } from '@patternfly/react-core';
 import * as FilterHelper from '../FilterList/FilterHelper';
 import { appLabelFilter, versionLabelFilter } from '../../pages/WorkloadList/FiltersAndSorts';
-
 import MissingSidecar from '../MissingSidecar/MissingSidecar';
 import { hasMissingSidecar, IstioTypes, Renderer, Resource, SortResource, TResource } from './Config';
 import { HealthIndicator } from '../Health/HealthIndicator';
@@ -14,13 +13,12 @@ import { IstioConfigItem } from '../../types/IstioConfigList';
 import { AppListItem } from '../../types/AppList';
 import { ServiceListItem } from '../../types/ServiceList';
 import { ActiveFilter } from '../../types/Filters';
-import { PFColors } from '../Pf/PfColors';
 import { renderAPILogo } from '../Logo/Logos';
 import { Health } from '../../types/Health';
 import NamespaceInfo from '../../pages/Overview/NamespaceInfo';
 import NamespaceMTLSStatusContainer from '../MTls/NamespaceMTLSStatus';
 import ValidationSummary from '../Validations/ValidationSummary';
-import OverviewCardContentExpanded from '../../pages/Overview/OverviewCardContentExpanded';
+import OverviewCardSparklineCharts from '../../pages/Overview/OverviewCardSparklineCharts';
 import { OverviewToolbar } from '../../pages/Overview/OverviewToolbar';
 import { StatefulFilters } from '../Filters/StatefulFilters';
 import IstioObjectLink, { GetIstioObjectUrl } from '../Link/IstioObjectLink';
@@ -32,6 +30,11 @@ import { PFBadgeType, PFBadge, PFBadges } from 'components/Pf/PfBadges';
 import MissingLabel from '../MissingLabel/MissingLabel';
 import MissingAuthPolicy from 'components/MissingAuthPolicy/MissingAuthPolicy';
 import { getReconciliationCondition } from 'utils/IstioConfigUtils';
+import Label from 'components/Label/Label';
+import { serverConfig } from 'config/ServerConfig';
+import ControlPlaneBadge from 'pages/Overview/ControlPlaneBadge';
+import NamespaceStatuses from 'pages/Overview/NamespaceStatuses';
+import { isGateway } from "../../helpers/LabelFilterHelper";
 
 // Links
 
@@ -81,7 +84,7 @@ export const details: Renderer<AppListItem | WorkloadListItem | ServiceListItem>
         )}
         {hasMissingSC && (
           <li>
-            <MissingSidecar namespace={item.namespace} />
+            <MissingSidecar namespace={item.namespace} isGateway={isGateway(item.labels)}/>
           </li>
         )}
         {isWorkload && (hasMissingApp || hasMissingVersion) && (
@@ -94,7 +97,7 @@ export const details: Renderer<AppListItem | WorkloadListItem | ServiceListItem>
         {item.istioReferences &&
           item.istioReferences.length > 0 &&
           item.istioReferences.map(ir => (
-            <li key={ir.namespace ? `${ir.name}_${ir.namespace}` : ir.name}>
+            <li key={ir.namespace ? `${ir.objectType}_${ir.name}_${ir.namespace}` : ir.name}>
               <PFBadge badge={PFBadges[ir.objectType]} position={TooltipPosition.top} />
               <IstioObjectLink name={ir.name} namespace={ir.namespace || ''} type={ir.objectType.toLowerCase()}>
                 {ir.name}
@@ -148,14 +151,17 @@ export const status: Renderer<NamespaceInfo> = (ns: NamespaceInfo) => {
         className="pf-m-center"
         style={{ verticalAlign: 'middle' }}
       >
-        <OverviewCardContentExpanded
+        { ns.status &&
+          <NamespaceStatuses key={ns.name} name={ns.name} status={ns.status} type={OverviewToolbar.currentOverviewType()} />
+        }
+        <OverviewCardSparklineCharts
           key={ns.name}
           name={ns.name}
           duration={FilterHelper.currentDuration()}
-          status={ns.status}
-          type={OverviewToolbar.currentOverviewType()}
+          direction={OverviewToolbar.currentDirectionType()}
           metrics={ns.metrics}
           errorMetrics={ns.errorMetrics}
+          controlPlaneMetrics={ns.controlPlaneMetrics}
         />
       </td>
     );
@@ -168,6 +174,9 @@ export const nsItem: Renderer<NamespaceInfo> = (ns: NamespaceInfo, _config: Reso
     <td role="gridcell" key={'VirtuaItem_NamespaceItem_' + ns.name} style={{ verticalAlign: 'middle' }}>
       <PFBadge badge={badge} />
       {ns.name}
+      {ns.name === serverConfig.istioNamespace &&
+        <ControlPlaneBadge />
+      }
     </td>
   );
 };
@@ -211,8 +220,8 @@ export const namespace: Renderer<TResource> = (item: TResource) => {
 const labelActivate = (filters: ActiveFilter[], key: string, value: string, id: string) => {
   return filters.some(filter => {
     if (filter.category === id) {
-      if (filter.value.includes(':')) {
-        const [k, v] = filter.value.split(':');
+      if (filter.value.includes('=')) {
+        const [k, v] = filter.value.split('=');
         if (k === key) {
           return v.split(',').some(val => value.split(',').some(vl => vl.trim().startsWith(val.trim())));
         }
@@ -239,6 +248,7 @@ export const labels: Renderer<SortResource | NamespaceInfo> = (
   path = path.substr(path.lastIndexOf('/console') + '/console'.length + 1);
   const labelFilt = path === 'overview' ? NsLabelFilter : labelFilter;
   const filters = FilterHelper.getFiltersFromURL([labelFilt, appLabelFilter, versionLabelFilter]);
+
   return (
     <td
       role="gridcell"
@@ -246,21 +256,19 @@ export const labels: Renderer<SortResource | NamespaceInfo> = (
       style={{ verticalAlign: 'middle' }}
     >
       {item.labels &&
-        Object.entries(item.labels).map(([key, value]) => {
-          const label = `${key}:${value}`;
+        Object.entries(item.labels).map(([key, value], i) => {
+          const label = `${key}=${value}`;
           const labelAct = labelActivate(filters.filters, key, value, labelFilt.category);
+          FilterHelper.getFiltersFromURL([labelFilt]).filters.forEach(f => console.log(`filter=|${f.value}|`));
           const isExactlyLabelFilter = FilterHelper.getFiltersFromURL([labelFilt]).filters.some(f =>
             f.value.includes(label)
           );
-          const badgeComponent = (
-            <Badge
-              key={`labelbadge_${key}_${value}_${item.name}`}
-              isRead={true}
-              style={{
-                backgroundColor: labelAct ? PFColors.Badge : undefined,
-                cursor: isExactlyLabelFilter || !labelAct ? 'pointer' : 'not-allowed',
-                whiteSpace: 'nowrap'
-              }}
+          const labelComponent = (
+            <Label
+              key={'label_' + i}
+              name={key}
+              value={value}
+              style={{ cursor: isExactlyLabelFilter || !labelAct ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}
               onClick={() =>
                 statefulFilter
                   ? labelAct
@@ -268,9 +276,7 @@ export const labels: Renderer<SortResource | NamespaceInfo> = (
                     : statefulFilter.current!.filterAdded(labelFilt, label)
                   : {}
               }
-            >
-              {key}={value}
-            </Badge>
+            />
           );
 
           return statefulFilter ? (
@@ -288,10 +294,10 @@ export const labels: Renderer<SortResource | NamespaceInfo> = (
                 )
               }
             >
-              {badgeComponent}
+              {labelComponent}
             </Tooltip>
           ) : (
-            badgeComponent
+            labelComponent
           );
         })}
     </td>

@@ -1,8 +1,6 @@
 import axios, { AxiosError } from 'axios';
-
 import { config } from '../config';
 import { LoginSession } from '../store/Store';
-
 import { App } from '../types/App';
 import { AppList } from '../types/AppList';
 import { AuthInfo } from '../types/Auth';
@@ -19,15 +17,25 @@ import {
   WorkloadHealth
 } from '../types/Health';
 import { IstioConfigDetails, IstioPermissions } from '../types/IstioConfigDetails';
-import { IstioConfigList } from '../types/IstioConfigList';
-import { Pod, PodLogs, ValidationStatus, EnvoyProxyDump } from '../types/IstioObjects';
-import { ComponentStatus } from '../types/IstioStatus';
+import { IstioConfigList, IstioConfigsMap } from '../types/IstioConfigList';
+import {
+  Pod,
+  PodLogs,
+  ValidationStatus,
+  EnvoyProxyDump,
+  VirtualService,
+  DestinationRuleC,
+  K8sHTTPRoute,
+  OutboundTrafficPolicy,
+  CanaryUpgradeStatus
+} from '../types/IstioObjects';
+import { ComponentStatus, IstiodResourceThresholds } from '../types/IstioStatus';
 import { JaegerInfo, JaegerResponse, JaegerSingleResponse } from '../types/JaegerInfo';
 import { MeshClusters } from '../types/Mesh';
 import { DashboardQuery, IstioMetricsOptions, MetricsStatsQuery } from '../types/MetricsOptions';
 import { IstioMetricsMap, MetricsStatsResult } from '../types/Metrics';
 import Namespace from '../types/Namespace';
-import { ServerConfig } from '../types/ServerConfig';
+import { KialiCrippledFeatures, ServerConfig } from '../types/ServerConfig';
 import { StatusState } from '../types/StatusState';
 import { ServiceDetailsInfo } from '../types/ServiceInfo';
 import { ServiceList } from '../types/ServiceList';
@@ -132,12 +140,20 @@ export const getMeshTls = () => {
   return newRequest<TLSStatus>(HTTP_VERBS.GET, urls.meshTls(), {}, {});
 };
 
+export const getOutboundTrafficPolicyMode = () => {
+  return newRequest<OutboundTrafficPolicy>(HTTP_VERBS.GET, urls.outboundTrafficPolicyMode(), {}, {});
+};
+
 export const getIstioStatus = () => {
   return newRequest<ComponentStatus[]>(HTTP_VERBS.GET, urls.istioStatus(), {}, {});
 };
 
 export const getIstioCertsInfo = () => {
   return newRequest<CertsInfo[]>(HTTP_VERBS.GET, urls.istioCertsInfo(), {}, {});
+};
+
+export const getIstiodResourceThresholds = () => {
+  return newRequest<IstiodResourceThresholds>(HTTP_VERBS.GET, urls.istiodResourceThresholds(), {}, {});
 };
 
 export const getNamespaceTls = (namespace: string) => {
@@ -158,7 +174,7 @@ export const getIstioConfig = (
   validate: boolean,
   labelSelector: string,
   workloadSelector: string
-) => {
+): Promise<Response<IstioConfigList>> => {
   const params: any = objects && objects.length > 0 ? { objects: objects.join(',') } : {};
   if (validate) {
     params.validate = validate;
@@ -169,11 +185,30 @@ export const getIstioConfig = (
   if (workloadSelector) {
     params.workloadSelector = workloadSelector;
   }
-  if (namespace) {
-    return newRequest<IstioConfigList>(HTTP_VERBS.GET, urls.istioConfig(namespace), params, {});
-  } else {
-    return newRequest<IstioConfigList>(HTTP_VERBS.GET, urls.allIstioConfigs, params, {});
+  return newRequest<IstioConfigList>(HTTP_VERBS.GET, urls.istioConfig(namespace), params, {});
+};
+
+export const getAllIstioConfigs = (
+  namespaces: string[],
+  objects: string[],
+  validate: boolean,
+  labelSelector: string,
+  workloadSelector: string
+): Promise<Response<IstioConfigsMap>> => {
+  const params: any = namespaces && namespaces.length > 0 ? { namespaces: namespaces.join(',') } : {};
+  if (objects && objects.length > 0) {
+    params.objects = objects.join(',');
   }
+  if (validate) {
+    params.validate = validate;
+  }
+  if (labelSelector) {
+    params.labelSelector = labelSelector;
+  }
+  if (workloadSelector) {
+    params.workloadSelector = workloadSelector;
+  }
+  return newRequest<IstioConfigsMap>(HTTP_VERBS.GET, urls.allIstioConfigs(), params, {});
 };
 
 export const getIstioConfigDetail = (namespace: string, objectType: string, object: string, validate: boolean) => {
@@ -204,6 +239,15 @@ export const createIstioConfigDetail = (
   json: string
 ): Promise<Response<string>> => {
   return newRequest(HTTP_VERBS.POST, urls.istioConfigCreate(namespace, objectType), {}, json);
+};
+
+export const getConfigValidations = (namespaces: string[]) => {
+  return newRequest<ValidationStatus>(
+    HTTP_VERBS.GET,
+    urls.configValidations(),
+    { namespaces: namespaces.join(',') },
+    {}
+  );
 };
 
 export const getServices = (namespace: string, params: { [key: string]: string } = {}) => {
@@ -475,7 +519,7 @@ export const getPodLogs = (
   namespace: string,
   name: string,
   container?: string,
-  tailLines?: number,
+  maxLines?: number,
   sinceTime?: number,
   duration?: DurationInSeconds,
   isProxy?: boolean
@@ -487,8 +531,8 @@ export const getPodLogs = (
   if (sinceTime) {
     params.sinceTime = sinceTime;
   }
-  if (tailLines && tailLines > 0) {
-    params.tailLines = tailLines;
+  if (maxLines && maxLines > 0) {
+    params.maxLines = maxLines;
   }
   if (duration && duration > 0) {
     params.duration = `${duration}s`;
@@ -565,4 +609,58 @@ export const getMetricsStats = (queries: MetricsStatsQuery[]) => {
 
 export const getClusters = () => {
   return newRequest<MeshClusters>(HTTP_VERBS.GET, urls.clusters, {}, {});
+};
+
+export function deleteServiceTrafficRouting(
+  virtualServices: VirtualService[],
+  destinationRules: DestinationRuleC[],
+  k8sHTTPRouteList: K8sHTTPRoute[]
+): Promise<any>;
+export function deleteServiceTrafficRouting(serviceDetail: ServiceDetailsInfo): Promise<any>;
+export function deleteServiceTrafficRouting(
+  vsOrSvc: VirtualService[] | ServiceDetailsInfo,
+  destinationRules?: DestinationRuleC[],
+  k8sHTTPRouteList?: K8sHTTPRoute[]
+): Promise<any> {
+  let vsList: VirtualService[];
+  let drList: DestinationRuleC[];
+  let routeList: K8sHTTPRoute[];
+  const deletePromises: Promise<any>[] = [];
+
+  if ('virtualServices' in vsOrSvc) {
+    vsList = vsOrSvc.virtualServices;
+    drList = DestinationRuleC.fromDrArray(vsOrSvc.destinationRules);
+    routeList = vsOrSvc.k8sHTTPRoutes || [];
+  } else {
+    vsList = vsOrSvc;
+    drList = destinationRules || [];
+    routeList = k8sHTTPRouteList || [];
+  }
+
+  vsList.forEach(vs => {
+    deletePromises.push(deleteIstioConfigDetail(vs.metadata.namespace || '', 'virtualservices', vs.metadata.name));
+  });
+
+  routeList.forEach(k8sr => {
+    deletePromises.push(deleteIstioConfigDetail(k8sr.metadata.namespace || '', 'k8shttproutes', k8sr.metadata.name));
+  });
+
+  drList.forEach(dr => {
+    deletePromises.push(deleteIstioConfigDetail(dr.metadata.namespace || '', 'destinationrules', dr.metadata.name));
+
+    const paName = dr.hasPeerAuthentication();
+    if (!!paName) {
+      deletePromises.push(deleteIstioConfigDetail(dr.metadata.namespace || '', 'peerauthentications', paName));
+    }
+  });
+
+  return Promise.all(deletePromises);
+}
+
+export const getCrippledFeatures = (): Promise<Response<KialiCrippledFeatures>> => {
+  return newRequest<KialiCrippledFeatures>(HTTP_VERBS.GET, urls.crippledFeatures, {}, {});
+};
+
+export const getCanaryUpgradeStatus = () => {
+  return newRequest<CanaryUpgradeStatus>(HTTP_VERBS.GET, urls.canaryUpgradeStatus(), {}, {});
 };

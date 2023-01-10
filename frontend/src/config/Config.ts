@@ -12,11 +12,11 @@ const conf = {
   },
   /** Toolbar Configuration */
   toolbar: {
-    /** Duration default in 1 minute */
+    /** Duration default is 1 minute */
     defaultDuration: 1 * UNIT_TIME.MINUTE,
-    /** By default refresh is 15 seconds */
-    defaultRefreshInterval: 15 * MILLISECONDS,
-    /** Time Range default in 10 minutes **/
+    /** By default refresh is 1 minute */
+    defaultRefreshInterval: 60 * MILLISECONDS,
+    /** Time Range default is 10 minutes **/
     defaultTimeRange: {
       rangeDuration: 10 * UNIT_TIME.MINUTE
     },
@@ -115,14 +115,16 @@ const conf = {
       appMetrics: (namespace: string, app: string) => `api/namespaces/${namespace}/apps/${app}/metrics`,
       appDashboard: (namespace: string, app: string) => `api/namespaces/${namespace}/apps/${app}/dashboard`,
       appSpans: (namespace: string, app: string) => `api/namespaces/${namespace}/apps/${app}/spans`,
+      canaryUpgradeStatus: () => 'api/mesh/canaries/status',
       clusters: 'api/clusters',
+      crippledFeatures: 'api/crippled',
       serviceSpans: (namespace: string, service: string) => `api/namespaces/${namespace}/services/${service}/spans`,
       workloadSpans: (namespace: string, workload: string) => `api/namespaces/${namespace}/workloads/${workload}/spans`,
       customDashboard: (namespace: string, template: string) =>
         `api/namespaces/${namespace}/customdashboard/${template}`,
       grafana: 'api/grafana',
       istioConfig: (namespace: string) => `api/namespaces/${namespace}/istio`,
-      allIstioConfigs: `api/istio/config`,
+      allIstioConfigs: () => `api/istio/config`,
       istioConfigCreate: (namespace: string, objectType: string) => `api/namespaces/${namespace}/istio/${objectType}`,
       istioConfigDetail: (namespace: string, objectType: string, object: string) =>
         `api/namespaces/${namespace}/istio/${objectType}/${object}`,
@@ -142,9 +144,12 @@ const conf = {
       namespaceMetrics: (namespace: string) => `api/namespaces/${namespace}/metrics`,
       namespaceTls: (namespace: string) => `api/namespaces/${namespace}/tls`,
       namespaceValidations: (namespace: string) => `api/namespaces/${namespace}/validations`,
+      configValidations: () => `api/istio/validations`,
       meshTls: () => 'api/mesh/tls',
+      outboundTrafficPolicyMode: () => 'api/mesh/outbound_traffic_policy/mode',
       istioStatus: () => 'api/istio/status',
       istioCertsInfo: () => 'api/istio/certs',
+      istiodResourceThresholds: () => 'api/mesh/resources/thresholds',
       pod: (namespace: string, pod: string) => `api/namespaces/${namespace}/pods/${pod}`,
       podLogs: (namespace: string, pod: string) => `api/namespaces/${namespace}/pods/${pod}/logs`,
       podEnvoyProxy: (namespace: string, pod: string) => `api/namespaces/${namespace}/pods/${pod}/config_dump`,

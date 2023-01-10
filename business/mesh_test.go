@@ -2,7 +2,6 @@ package business
 
 import (
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -91,6 +90,7 @@ func TestGetClustersResolvesTheKialiCluster(t *testing.T) {
 	}
 
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetSecrets", conf.IstioNamespace, "istio/multiCluster=true").Return([]core_v1.Secret{}, nil)
 	k8s.On("GetDeployment", conf.IstioNamespace, conf.ExternalServices.Istio.IstiodDeploymentName).Return(&istioDeploymentMock, nil)
 	k8s.On("GetConfigMap", conf.IstioNamespace, conf.ExternalServices.Istio.IstioSidecarInjectorConfigMapName).Return(&sidecarConfigMapMock, nil)
@@ -98,9 +98,9 @@ func TestGetClustersResolvesTheKialiCluster(t *testing.T) {
 	k8s.On("GetNamespace", "foo").Return(&kialiNs, nil)
 	k8s.On("GetServicesByLabels", "foo", "app.kubernetes.io/part-of=kiali").Return(kialiSvc, nil)
 
-	os.Setenv("KUBERNETES_SERVICE_HOST", "127.0.0.2")
-	os.Setenv("KUBERNETES_SERVICE_PORT", "9443")
-	os.Setenv("ACTIVE_NAMESPACE", "foo")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "127.0.0.2")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "9443")
+	t.Setenv("ACTIVE_NAMESPACE", "foo")
 
 	layer := NewWithBackends(k8s, nil, nil)
 	meshSvc := layer.Mesh
@@ -177,6 +177,7 @@ func TestGetClustersResolvesRemoteClusters(t *testing.T) {
 
 	var nilDeployment *apps_v1.Deployment
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetSecrets", conf.IstioNamespace, "istio/multiCluster=true").Return([]core_v1.Secret{secretMock}, nil)
 	k8s.On("GetDeployment", conf.IstioNamespace, "istiod").Return(nilDeployment, nil)
 
@@ -205,7 +206,7 @@ func TestGetClustersResolvesRemoteClusters(t *testing.T) {
 			},
 		}
 
-		os.Setenv("ACTIVE_NAMESPACE", "foo")
+		t.Setenv("ACTIVE_NAMESPACE", "foo")
 
 		remoteClient.On("GetNamespace", conf.IstioNamespace).Return(remoteNs, nil)
 		remoteClient.On("GetClusterServicesByLabels", "app.kubernetes.io/part-of=kiali").Return(kialiSvc, nil)
@@ -263,6 +264,7 @@ func TestIsMeshConfiguredIsCached(t *testing.T) {
 	}
 
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetConfigMap", "foo", "bar").Return(&istioConfigMapMock, nil)
 
 	// Create a MeshService and invoke IsMeshConfigured
@@ -276,6 +278,7 @@ func TestIsMeshConfiguredIsCached(t *testing.T) {
 	// empty mock should never be called and we still should get a value.
 	k8s = new(kubetest.K8SClientMock)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 
 	layer = NewWithBackends(k8s, nil, nil)
 	meshSvc = layer.Mesh
@@ -304,7 +307,9 @@ func TestResolveKialiControlPlaneClusterIsCached(t *testing.T) {
 	conf.KubernetesConfig.CacheEnabled = false
 	config.Set(conf)
 
-	os.Setenv("ACTIVE_NAMESPACE", "foo")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "127.0.0.2")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "9443")
+	t.Setenv("ACTIVE_NAMESPACE", "foo")
 
 	istioDeploymentMock := apps_v1.Deployment{
 		Spec: apps_v1.DeploymentSpec{
@@ -339,6 +344,7 @@ func TestResolveKialiControlPlaneClusterIsCached(t *testing.T) {
 	var nilNamespace *core_v1.Namespace
 
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetDeployment", "foo", "bar").Return(&istioDeploymentMock, nil)
 	k8s.On("GetConfigMap", "foo", conf.ExternalServices.Istio.IstioSidecarInjectorConfigMapName).Return(nilConfigMap, &notFoundErr)
 	k8s.On("GetNamespace", "foo").Return(nilNamespace, &notFoundErr)
@@ -356,6 +362,7 @@ func TestResolveKialiControlPlaneClusterIsCached(t *testing.T) {
 	// empty mock should never be called and we still should get a value.
 	k8s = new(kubetest.K8SClientMock)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 
 	layer = NewWithBackends(k8s, nil, nil)
 	meshSvc = layer.Mesh
@@ -363,4 +370,73 @@ func TestResolveKialiControlPlaneClusterIsCached(t *testing.T) {
 	check.Nil(err, "ResolveKialiControlPlaneCluster failed: %s", err)
 	check.NotNil(result)
 	check.Equal("KialiCluster", result.Name)
+}
+
+// TestCanaryUpgradeNotConfigured verifies that when there is no canary upgrade configured, both the migrated and pending namespace lists are empty
+func TestCanaryUpgradeNotConfigured(t *testing.T) {
+	check := assert.New(t)
+
+	k8s := new(kubetest.K8SClientMock)
+	conf := config.NewConfig()
+	conf.ExternalServices.Istio.IstioCanaryRevision.Current = "default"
+	conf.ExternalServices.Istio.IstioCanaryRevision.Upgrade = "canary"
+
+	config.Set(conf)
+
+	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
+	k8s.On("GetNamespaces", "istio-injection=enabled").Return([]core_v1.Namespace{}, nil)
+	k8s.On("GetNamespaces", "istio.io/rev=default").Return([]core_v1.Namespace{}, nil)
+	k8s.On("GetNamespaces", "istio.io/rev=canary").Return([]core_v1.Namespace{}, nil)
+
+	// Create a MeshService and invoke IsMeshConfigured
+	layer := NewWithBackends(k8s, nil, nil)
+	meshSvc := layer.Mesh
+
+	canaryUpgradeStatus, err := meshSvc.CanaryUpgradeStatus()
+
+	check.Nil(err, "IstiodCanariesStatus failed: %s", err)
+	check.NotNil(canaryUpgradeStatus)
+}
+
+// TestCanaryUpgradeConfigured verifies that when there is a canary upgrade in place, the migrated and pending namespaces should have namespaces
+func TestCanaryUpgradeConfigured(t *testing.T) {
+	check := assert.New(t)
+
+	k8s := new(kubetest.K8SClientMock)
+	conf := config.NewConfig()
+	conf.ExternalServices.Istio.IstioCanaryRevision.Current = "default"
+	conf.ExternalServices.Istio.IstioCanaryRevision.Upgrade = "canary"
+
+	config.Set(conf)
+
+	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
+
+	migratedNamespace := core_v1.Namespace{
+		ObjectMeta: v1.ObjectMeta{Name: "travel-agency"},
+	}
+	migratedNamespaces := []core_v1.Namespace{migratedNamespace}
+
+	pendingNamespace := core_v1.Namespace{
+		ObjectMeta: v1.ObjectMeta{Name: "travel-portal"},
+	}
+	pendingNamespaces := []core_v1.Namespace{pendingNamespace}
+
+	k8s.On("GetNamespaces", "istio-injection=enabled").Return(pendingNamespaces, nil)
+	k8s.On("GetNamespaces", "istio.io/rev=default").Return([]core_v1.Namespace{}, nil)
+	k8s.On("GetNamespaces", "istio.io/rev=canary").Return(migratedNamespaces, nil)
+
+	// Create a MeshService and invoke IsMeshConfigured
+	layer := NewWithBackends(k8s, nil, nil)
+	meshSvc := layer.Mesh
+
+	canaryUpgradeStatus, err := meshSvc.CanaryUpgradeStatus()
+
+	check.Nil(err, "IstiodCanariesStatus failed: %s", err)
+	check.Contains(canaryUpgradeStatus.MigratedNamespaces, "travel-agency")
+	check.Equal(1, len(canaryUpgradeStatus.MigratedNamespaces))
+	check.Contains(canaryUpgradeStatus.PendingNamespaces, "travel-portal")
+	check.Equal(1, len(canaryUpgradeStatus.PendingNamespaces))
+
 }

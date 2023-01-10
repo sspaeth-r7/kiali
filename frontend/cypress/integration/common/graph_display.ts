@@ -1,4 +1,5 @@
-import { Before, Given, Then, When } from 'cypress-cucumber-preprocessor/steps';
+import { Before, Then, When } from '@badeball/cypress-cucumber-preprocessor';
+import { ensureKialiFinishedLoading } from './transition';
 
 const url = '/console';
 
@@ -20,7 +21,12 @@ Before(() => {
 
 When('user graphs {string} namespaces', namespaces => {
   // Forcing "Pause" to not cause unhandled promises from the browser when cypress is testing
+  cy.intercept(`**/api/namespaces/graph*`).as('graphNamespaces');
   cy.visit(url + `/graph/namespaces?refresh=0&namespaces=${namespaces}`);
+  if (namespaces !== '') {
+    cy.wait('@graphNamespaces');
+  }
+  ensureKialiFinishedLoading();
 });
 
 When('user opens display menu', () => {
@@ -41,7 +47,6 @@ When('user {string} {string} edge labels', (action, edgeLabel) => {
 });
 
 When('user {string} {string} option', (action, option: string) => {
-  let id: string;
   switch (option.toLowerCase()) {
     case 'cluster boxes':
       option = 'boxByCluster';
@@ -88,7 +93,7 @@ When('user {string} {string} option', (action, option: string) => {
 });
 
 When('user resets to factory default', () => {
-  cy.get('button#graph-factory-reset').click()
+  cy.get('button#graph-factory-reset').click();
   cy.get('#loading_kiali_spinner').should('not.exist');
 });
 
@@ -158,7 +163,7 @@ Then('the graph reflects default settings', () => {
     });
 });
 
-Then('user sees {string} edge labels', el => {
+Then('user sees {string} edge labels', (el: string) => {
   validateInput(el, 'appear');
 
   let rate;
@@ -183,7 +188,7 @@ Then('user sees {string} edge labels', el => {
     });
 });
 
-Then('user sees {string} edge label option is closed', edgeLabel => {
+Then('user sees {string} edge label option is closed', (edgeLabel: string) => {
   validateInput(edgeLabel, 'does not appear');
 });
 
@@ -200,7 +205,14 @@ Then('user does not see {string} boxing', (boxByType: string) => {
     });
 });
 
-Then('idle edges {string} in the graph', action => {
+// In older versions of Istio, when this was written, this istio-system namespace
+// would typicaly have some idle edges.  That is no longer the case.  It is not easy
+// to force an idle edge to exist, especially in the timeframe of a test, a demo would
+// need to generate an edge, then stop, and wait for it to become idle (i.e. at least a
+// minute depending on the duration used in the test.) In the future we could possibly
+// try to add something like this, but for now I am changing the test to just ensure
+// that non-idle edges don't disappear.
+Then('idle edges {string} in the graph', (action: string) => {
   validateInput('filterIdleEdges', action);
 
   cy.waitForReact();
@@ -208,16 +220,19 @@ Then('idle edges {string} in the graph', action => {
     .should('have.length', '1')
     .getCurrentState()
     .then(state => {
-      const numEdges = state.cy.edges(`[^hasTraffic]`).length;
+      const numEdges = state.cy.edges(`[hasTraffic]`).length;
+      const numIdleEdges = state.cy.edges(`[^hasTraffic]`).length;
       if (action === 'appear') {
         assert.isAbove(numEdges, 0);
+        assert.isAtLeast(numIdleEdges, 0);
       } else {
-        assert.equal(numEdges, 0);
+        assert.isAbove(numEdges, 0);
+        assert.equal(numIdleEdges, 0);
       }
     });
 });
 
-Then('idle nodes {string} in the graph', action => {
+Then('idle nodes {string} in the graph', (action: string) => {
   validateInput('filterIdleNodes', action);
 
   cy.waitForReact();
@@ -234,7 +249,7 @@ Then('idle nodes {string} in the graph', action => {
     });
 });
 
-Then('ranks {string} in the graph', action => {
+Then('ranks {string} in the graph', (action: string) => {
   validateInput('rank', action);
 
   cy.waitForReact();
@@ -264,7 +279,7 @@ Then('user does not see service nodes', () => {
     });
 });
 
-Then('security {string} in the graph', action => {
+Then('security {string} in the graph', (action: string) => {
   validateInput('filterSecurity', action);
 
   cy.waitForReact();
@@ -281,8 +296,7 @@ Then('security {string} in the graph', action => {
     });
 });
 
-Then('{string} option {string} in the graph', (option, action) => {
-  let id: string;
+Then('{string} option {string} in the graph', (option: string, action: string) => {
   switch (option.toLowerCase()) {
     case 'missing sidecars':
       option = 'filterSidecars';

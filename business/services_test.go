@@ -2,7 +2,7 @@ package business
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +23,7 @@ func TestServiceListParsing(t *testing.T) {
 	k8s.MockServices("Namespace", []string{"reviews", "httpbin"})
 	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(kubetest.FakePodList(), nil)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetNamespace", mock.AnythingOfType("string")).Return(&core_v1.Namespace{}, nil)
 	conf := config.NewConfig()
 	config.Set(conf)
@@ -49,11 +50,12 @@ func TestParseRegistryServices(t *testing.T) {
 
 	k8s := new(kubetest.K8SClientMock)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	setupGlobalMeshConfig()
 	svc := SvcService{k8s: nil, businessLayer: NewWithBackends(k8s, nil, nil)}
 
 	servicesz := "../tests/data/registry/services-registryz.json"
-	bServicesz, err := ioutil.ReadFile(servicesz)
+	bServicesz, err := os.ReadFile(servicesz)
 	assert.NoError(err)
 	rServices := map[string][]byte{
 		"istiod1": bServicesz,
@@ -64,7 +66,7 @@ func TestParseRegistryServices(t *testing.T) {
 	assert.Equal(3, len(registryServices))
 
 	configz := "../tests/data/registry/services-configz.json"
-	bConfigz, err2 := ioutil.ReadFile(configz)
+	bConfigz, err2 := os.ReadFile(configz)
 	assert.NoError(err2)
 	rConfig := map[string][]byte{
 		"istiod1": bConfigz,
@@ -92,7 +94,7 @@ func TestFilterLocalIstioRegistry(t *testing.T) {
 	config.Set(conf)
 
 	servicesz := "../tests/data/registry/istio-east-registryz.json"
-	bServicesz, err := ioutil.ReadFile(servicesz)
+	bServicesz, err := os.ReadFile(servicesz)
 	assert.NoError(err)
 	rServices := map[string][]byte{
 		"istiod1": bServicesz,

@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { Workload } from '../../types/Workload';
 import { Card, CardBody, CardHeader, Title, TitleSizes, Tooltip, TooltipPosition } from '@patternfly/react-core';
-import DetailDescription from '../../components/Details/DetailDescription';
 import { style } from 'typestyle';
 import Labels from '../../components/Label/Labels';
 import LocalTime from '../../components/Time/LocalTime';
@@ -16,6 +15,8 @@ import { PFBadge, PFBadges } from '../../components/Pf/PfBadges';
 import MissingLabel from '../../components/MissingLabel/MissingLabel';
 import MissingAuthPolicy from 'components/MissingAuthPolicy/MissingAuthPolicy';
 import { hasMissingAuthPolicy } from 'utils/IstioConfigUtils';
+import DetailDescriptionContainer from "../../components/Details/DetailDescription";
+import { isGateway } from "../../helpers/LabelFilterHelper";
 
 type WorkloadDescriptionProps = {
   workload?: Workload;
@@ -121,7 +122,7 @@ class WorkloadDescription extends React.Component<WorkloadDescriptionProps> {
     ) : undefined;
 
     return workload ? (
-      <Card id={'WorkloadDescriptionCard'}>
+      <Card id={'WorkloadDescriptionCard'} data-test="workload-description-card">
         <CardHeader>
           <Title headingLevel="h5" size={TitleSizes.lg}>
             <div key="service-icon" className={iconStyle}>
@@ -146,6 +147,7 @@ class WorkloadDescription extends React.Component<WorkloadDescriptionProps> {
                 tooltip={true}
                 style={{ marginLeft: '10px' }}
                 text={''}
+                isGateway={isGateway(workload.labels)}
               />
             )}
             {this.props.workload && hasMissingAuthPolicy(this.props.workload.name, this.props.workload.validations) && (
@@ -173,7 +175,7 @@ class WorkloadDescription extends React.Component<WorkloadDescriptionProps> {
               tooltipMessage={isTemplateLabels ? 'Labels defined on the Workload template' : undefined}
             />
           )}
-          <DetailDescription
+          <DetailDescriptionContainer
             namespace={this.props.namespace}
             apps={apps}
             services={services}

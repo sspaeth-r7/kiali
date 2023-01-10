@@ -1,12 +1,11 @@
 import * as React from 'react';
-import { Button, Popover, PopoverPosition } from '@patternfly/react-core';
+import { Button, ButtonVariant, Popover, PopoverPosition } from '@patternfly/react-core';
 import { connect } from 'react-redux';
 import { bindActionCreators } from 'redux';
-import { ThunkDispatch } from 'redux-thunk';
+import { KialiDispatch } from 'types/Redux';
 import { KialiAppState } from 'store/Store';
 import ReactResizeDetector from 'react-resize-detector';
 import { KialiIcon } from 'config/KialiIcon';
-import { KialiAppAction } from 'actions/KialiAppAction';
 import { TourActions } from 'actions/TourActions';
 import { style } from 'typestyle';
 import { PFColors } from 'components/Pf/PfColors';
@@ -91,7 +90,7 @@ class TourStop extends React.PureComponent<TourStopProps> {
   private backButton = () => {
     const stop = this.getStop('back');
     return (
-      <Button isDisabled={stop === undefined} variant="secondary" onClick={() => this.setStop(stop!)}>
+      <Button isDisabled={stop === undefined} variant={ButtonVariant.secondary} onClick={() => this.setStop(stop!)}>
         <KialiIcon.AngleLeft /> Back
       </Button>
     );
@@ -105,14 +104,14 @@ class TourStop extends React.PureComponent<TourStopProps> {
 
     if (stop === undefined) {
       return (
-        <Button className={right} variant="primary" onClick={this.props.endTour}>
+        <Button className={right} variant={ButtonVariant.primary} onClick={this.props.endTour}>
           Done
         </Button>
       );
     }
 
     return (
-      <Button className={right} variant="primary" onClick={() => this.setStop(stop!)}>
+      <Button className={right} variant={ButtonVariant.primary} onClick={() => this.setStop(stop!)}>
         Next <KialiIcon.AngleRight />
       </Button>
     );
@@ -209,7 +208,7 @@ const mapStateToProps = (state: KialiAppState) => ({
   activeStop: state.tourState.activeStop
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => {
+const mapDispatchToProps = (dispatch: KialiDispatch) => {
   return {
     endTour: bindActionCreators(TourActions.endTour, dispatch),
     setStop: bindActionCreators(TourActions.setStop, dispatch)

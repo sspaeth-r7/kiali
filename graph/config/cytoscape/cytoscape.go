@@ -12,6 +12,7 @@
 //            nodes for requested boxing.
 //
 // The package provides the Cytoscape implementation of graph/ConfigVendor.
+
 package cytoscape
 
 import (
@@ -25,17 +26,19 @@ import (
 
 // ResponseFlags is a map of maps. Each response code is broken down by responseFlags:percentageOfTraffic, e.g.:
 // "200" : {
-//    "-"     : "80.0",
-//    "DC"    : "10.0",
-//    "FI,FD" : "10.0"
+//	"-"     : "80.0",
+//	"DC"    : "10.0",
+//	"FI,FD" : "10.0"
 // }, ...
+
 type ResponseFlags map[string]string
 
 // ResponseHosts is a map of maps. Each response host is broken down by responseFlags:percentageOfTraffic, e.g.:
-// "200" : {
-//    "www.google.com" : "80.0",
-//    "www.yahoo.com"  : "20.0"
-// }, ...
+//
+//	"200" : {
+//	   "www.google.com" : "80.0",
+//	   "www.yahoo.com"  : "20.0"
+//	}, ...
 type ResponseHosts map[string]string
 
 // ResponseDetail holds information broken down by response code.
@@ -60,6 +63,8 @@ type GWInfo struct {
 	IngressInfo GWInfoIngress `json:"ingressInfo,omitempty"`
 	// EgressInfo contains the resolved gateway configuration if the node represents an Istio egress gateway
 	EgressInfo GWInfoIngress `json:"egressInfo,omitempty"`
+	// GatewayAPIInfo contains the resolved gateway configuration if the node represents a Gateway API gateway
+	GatewayAPIInfo GWInfoIngress `json:"gatewayAPIInfo,omitempty"`
 }
 
 // GWInfoIngress contains the resolved gateway configuration if the node represents an Istio ingress gateway
@@ -249,12 +254,11 @@ func buildConfig(trafficMap graph.TrafficMap, nodes *[]*NodeWrapper, edges *[]*E
 
 		addNodeTelemetry(n, nd)
 
-		// set annotations, if available
 		if val, ok := n.Metadata[graph.HealthData]; ok {
-			nd.HealthData = val.(interface{})
+			nd.HealthData = val
 		}
 		if val, ok := n.Metadata[graph.HealthDataApp]; ok {
-			nd.HealthDataApp = val.(interface{})
+			nd.HealthDataApp = val
 		}
 
 		// set k8s labels, if any
@@ -288,24 +292,34 @@ func buildConfig(trafficMap graph.TrafficMap, nodes *[]*NodeWrapper, edges *[]*E
 		}
 
 		// node may represent an Istio Ingress Gateway
-		if gateways, ok := n.Metadata[graph.IsIngressGateway]; ok {
+		if ingGateways, ok := n.Metadata[graph.IsIngressGateway]; ok {
 			var configuredHostnames []string
-			for _, hosts := range gateways.(graph.GatewaysMetadata) {
+			for _, hosts := range ingGateways.(graph.GatewaysMetadata) {
 				configuredHostnames = append(configuredHostnames, hosts...)
 			}
 
 			nd.IsGateway = &GWInfo{
 				IngressInfo: GWInfoIngress{Hostnames: configuredHostnames},
 			}
-		} else if gateways, ok := n.Metadata[graph.IsEgressGateway]; ok {
+		} else if egrGateways, ok := n.Metadata[graph.IsEgressGateway]; ok {
 			// node may represent an Istio Egress Gateway
 			var configuredHostnames []string
-			for _, hosts := range gateways.(graph.GatewaysMetadata) {
+			for _, hosts := range egrGateways.(graph.GatewaysMetadata) {
 				configuredHostnames = append(configuredHostnames, hosts...)
 			}
 
 			nd.IsGateway = &GWInfo{
 				EgressInfo: GWInfoIngress{Hostnames: configuredHostnames},
+			}
+		} else if apiGateways, ok := n.Metadata[graph.IsGatewayAPI]; ok {
+			// node may represent a Gateway API
+			var configuredHostnames []string
+			for _, hosts := range apiGateways.(graph.GatewaysMetadata) {
+				configuredHostnames = append(configuredHostnames, hosts...)
+			}
+
+			nd.IsGateway = &GWInfo{
+				GatewayAPIInfo: GWInfoIngress{Hostnames: configuredHostnames},
 			}
 		}
 

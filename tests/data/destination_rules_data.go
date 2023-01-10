@@ -9,9 +9,13 @@ func CreateEmptyDestinationRule(namespace string, name string, host string) *net
 	dr := networking_v1beta1.DestinationRule{}
 	dr.Name = name
 	dr.Namespace = namespace
-	dr.ClusterName = "svc.cluster.local"
 	dr.Spec.Host = host
 	return &dr
+}
+
+func CreateDestinationRuleWithLabel(namespace string, name string, host string, labelKey, labelValue string) *networking_v1beta1.DestinationRule {
+	destinationRule := AddSubsetToDestinationRule(CreateCustomLabelSubset("v1", labelKey, labelValue), CreateEmptyDestinationRule(namespace, name, host))
+	return destinationRule
 }
 
 func CreateTestDestinationRule(namespace string, name string, host string) *networking_v1beta1.DestinationRule {
@@ -26,11 +30,27 @@ func CreateNoLabelsDestinationRule(namespace string, name string, host string) *
 	return destinationRule
 }
 
+func CreateNoSubsetLabelsDestinationRule(namespace string, name string, host string) *networking_v1beta1.DestinationRule {
+	destinationRule := AddSubsetToDestinationRule(CreateNoLabelsSubset("v1"),
+		AddSubsetToDestinationRule(CreateNoLabelsSubset("v2"), CreateEmptyDestinationRule(namespace, name, host)))
+	return destinationRule
+}
+
 func CreateSubset(name string, versionLabel string) *api_networking_v1beta1.Subset {
 	s := api_networking_v1beta1.Subset{
 		Name: name,
 		Labels: map[string]string{
 			"version": versionLabel,
+		},
+	}
+	return &s
+}
+
+func CreateCustomLabelSubset(name string, labelKey, labelValue string) *api_networking_v1beta1.Subset {
+	s := api_networking_v1beta1.Subset{
+		Name: name,
+		Labels: map[string]string{
+			labelKey: labelValue,
 		},
 	}
 	return &s

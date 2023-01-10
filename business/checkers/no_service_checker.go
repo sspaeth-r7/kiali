@@ -12,12 +12,12 @@ import (
 const ServiceRoleCheckerType = "servicerole"
 
 type NoServiceChecker struct {
-	Namespace             string
 	Namespaces            models.Namespaces
 	IstioConfigList       *models.IstioConfigList
 	WorkloadsPerNamespace map[string]models.WorkloadList
 	AuthorizationDetails  *kubernetes.RBACDetails
 	RegistryServices      []*kubernetes.RegistryService
+	PolicyAllowAny        bool
 }
 
 func (in NoServiceChecker) Check() models.IstioValidations {
@@ -31,25 +31,25 @@ func (in NoServiceChecker) Check() models.IstioValidations {
 	gatewayNames := kubernetes.GatewayNames(in.IstioConfigList.Gateways)
 
 	for _, virtualService := range in.IstioConfigList.VirtualServices {
-		validations.MergeValidations(runVirtualServiceCheck(virtualService, in.Namespace, serviceHosts, in.Namespaces, in.RegistryServices))
+		validations.MergeValidations(runVirtualServiceCheck(virtualService, serviceHosts, in.Namespaces, in.RegistryServices, in.PolicyAllowAny))
 
 		validations.MergeValidations(runGatewayCheck(virtualService, gatewayNames))
 	}
 	for _, destinationRule := range in.IstioConfigList.DestinationRules {
-		validations.MergeValidations(runDestinationRuleCheck(destinationRule, in.Namespace, in.WorkloadsPerNamespace, serviceHosts, in.Namespaces, in.RegistryServices, in.IstioConfigList.VirtualServices))
+		validations.MergeValidations(runDestinationRuleCheck(destinationRule, in.WorkloadsPerNamespace, in.IstioConfigList.ServiceEntries, in.Namespaces, in.RegistryServices, in.IstioConfigList.VirtualServices, in.PolicyAllowAny))
 	}
 	return validations
 }
 
-func runVirtualServiceCheck(virtualService networking_v1beta1.VirtualService, namespace string, serviceHosts map[string][]string, clusterNamespaces models.Namespaces, registryStatus []*kubernetes.RegistryService) models.IstioValidations {
+func runVirtualServiceCheck(virtualService *networking_v1beta1.VirtualService, serviceHosts map[string][]string, clusterNamespaces models.Namespaces, registryStatus []*kubernetes.RegistryService, policyAllowAny bool) models.IstioValidations {
 	key, validations := EmptyValidValidation(virtualService.Name, virtualService.Namespace, VirtualCheckerType)
 
 	result, valid := virtualservices.NoHostChecker{
-		Namespace:         namespace,
 		Namespaces:        clusterNamespaces,
 		VirtualService:    virtualService,
 		ServiceEntryHosts: serviceHosts,
 		RegistryServices:  registryStatus,
+		PolicyAllowAny:    policyAllowAny,
 	}.Check()
 
 	validations.Valid = valid
@@ -58,7 +58,7 @@ func runVirtualServiceCheck(virtualService networking_v1beta1.VirtualService, na
 	return models.IstioValidations{key: validations}
 }
 
-func runGatewayCheck(virtualService networking_v1beta1.VirtualService, gatewayNames map[string]struct{}) models.IstioValidations {
+func runGatewayCheck(virtualService *networking_v1beta1.VirtualService, gatewayNames map[string]struct{}) models.IstioValidations {
 	key, validations := EmptyValidValidation(virtualService.Name, virtualService.Namespace, VirtualCheckerType)
 
 	result, valid := virtualservices.NoGatewayChecker{
@@ -72,18 +72,18 @@ func runGatewayCheck(virtualService networking_v1beta1.VirtualService, gatewayNa
 	return models.IstioValidations{key: validations}
 }
 
-func runDestinationRuleCheck(destinationRule networking_v1beta1.DestinationRule, namespace string, workloads map[string]models.WorkloadList,
-	serviceHosts map[string][]string, clusterNamespaces models.Namespaces, registryStatus []*kubernetes.RegistryService, virtualServices []networking_v1beta1.VirtualService) models.IstioValidations {
+func runDestinationRuleCheck(destinationRule *networking_v1beta1.DestinationRule, workloads map[string]models.WorkloadList,
+	serviceEntries []*networking_v1beta1.ServiceEntry, clusterNamespaces models.Namespaces, registryStatus []*kubernetes.RegistryService, virtualServices []*networking_v1beta1.VirtualService, policyAllowAny bool) models.IstioValidations {
 	key, validations := EmptyValidValidation(destinationRule.Name, destinationRule.Namespace, DestinationRuleCheckerType)
 
 	result, valid := destinationrules.NoDestinationChecker{
-		Namespace:             namespace,
 		Namespaces:            clusterNamespaces,
 		WorkloadsPerNamespace: workloads,
 		DestinationRule:       destinationRule,
 		VirtualServices:       virtualServices,
-		ServiceEntries:        serviceHosts,
+		ServiceEntries:        serviceEntries,
 		RegistryServices:      registryStatus,
+		PolicyAllowAny:        policyAllowAny,
 	}.Check()
 
 	validations.Valid = valid

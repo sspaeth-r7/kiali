@@ -1,35 +1,48 @@
 import * as React from 'react';
-import {
-  CardActions,
-  CardHeader,
-  CardTitle,
-  Dropdown,
-  DropdownItem,
-  KebabToggle,
-} from '@patternfly/react-core';
+import { CardActions, CardHeader, CardTitle, Dropdown, DropdownItem, KebabToggle } from '@patternfly/react-core';
 import { ExternalLinkAltIcon } from '@patternfly/react-icons';
 import { FormattedTraceInfo, fullIDStyle } from './FormattedTraceInfo';
 import history from 'app/History';
+import { KialiAppState } from '../../../store/Store';
+import { connect } from 'react-redux';
+import { isParentKiosk, kioskContextMenuAction } from '../../Kiosk/KioskActions';
 
-interface Props {
+type ReduxProps = {
+  kiosk: string;
+};
+
+type Props = ReduxProps & {
   formattedTrace: FormattedTraceInfo;
   externalURL?: string;
   graphURL: string;
   comparisonURL?: string;
-}
+};
 
-export const JaegerTraceTitle = (props: Props) => {
-  const links = [<DropdownItem onClick={() => history.push(props.graphURL)}>View on Graph</DropdownItem>];
+const JaegerTraceTitle = (props: Props) => {
+  const links = [
+    <DropdownItem
+      key="view_on_graph"
+      onClick={() => {
+        if (isParentKiosk(props.kiosk)) {
+          kioskContextMenuAction(props.graphURL);
+        } else {
+          history.push(props.graphURL);
+        }
+      }}
+    >
+      View on Graph
+    </DropdownItem>
+  ];
   if (props.externalURL) {
     links.push(
-      <DropdownItem onClick={() => window.open(props.externalURL, '_blank')}>
+      <DropdownItem key="view_in_tracing" onClick={() => window.open(props.externalURL, '_blank')}>
         View in Tracing <ExternalLinkAltIcon />
       </DropdownItem>
     );
   }
   if (props.comparisonURL) {
     links.push(
-      <DropdownItem onClick={() => window.open(props.comparisonURL, '_blank')}>
+      <DropdownItem key="compare_with_similar_traces" onClick={() => window.open(props.comparisonURL, '_blank')}>
         Compare with similar traces <ExternalLinkAltIcon />
       </DropdownItem>
     );
@@ -44,6 +57,7 @@ export const JaegerTraceTitle = (props: Props) => {
         </span>
         <Dropdown
           toggle={<KebabToggle onToggle={() => setToggled(!toggled)} />}
+          data-test="trace-details-kebab"
           dropdownItems={links}
           isPlain={true}
           isOpen={toggled}
@@ -58,3 +72,12 @@ export const JaegerTraceTitle = (props: Props) => {
     </CardHeader>
   );
 };
+
+const mapStateToProps = (state: KialiAppState) => {
+  return {
+    kiosk: state.globalState.kiosk
+  };
+};
+
+const JaegerTraceTitleContainer = connect(mapStateToProps)(JaegerTraceTitle);
+export default JaegerTraceTitleContainer;

@@ -22,6 +22,7 @@ import TimeDurationContainer from '../../components/Time/TimeDurationComponent';
 import { sortIstioReferences } from '../AppList/FiltersAndSorts';
 import { validationKey } from '../../types/IstioConfigList';
 import { ServiceHealth } from '../../types/Health';
+import RefreshNotifier from "../../components/Refresh/RefreshNotifier";
 
 type ServiceListPageState = FilterComponent.State<ServiceListItem>;
 
@@ -107,9 +108,10 @@ class ServiceListPageComponent extends FilterComponent.Component<
         validation: this.getServiceValidation(service.name, data.namespace.name, data.validations),
         additionalDetailSample: service.additionalDetailSample,
         labels: service.labels || {},
+        ports: service.ports || {},
         istioReferences: sortIstioReferences(service.istioReferences, true),
         kialiWizard: service.kialiWizard,
-        serviceRegistry: service.serviceRegistry
+        serviceRegistry: service.serviceRegistry,
       }));
     }
     return [];
@@ -153,13 +155,13 @@ class ServiceListPageComponent extends FilterComponent.Component<
   render() {
     return (
       <>
+        <RefreshNotifier onTick={this.updateListItems} />
         <div style={{ backgroundColor: '#fff' }}>
           <DefaultSecondaryMasthead
             rightToolbar={
               <TimeDurationContainer
                 key={'DurationDropdown'}
                 id="service-list-duration-dropdown"
-                handleRefresh={this.updateListItems}
                 disabled={false}
               />
             }

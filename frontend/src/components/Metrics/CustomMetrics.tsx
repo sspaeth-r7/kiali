@@ -1,7 +1,16 @@
 import * as React from 'react';
 import { connect } from 'react-redux';
 import { RouteComponentProps, withRouter } from 'react-router';
-import { Toolbar, ToolbarGroup, ToolbarItem, Card, CardBody, Checkbox } from '@patternfly/react-core';
+import {
+  Toolbar,
+  ToolbarGroup,
+  ToolbarItem,
+  Card,
+  CardBody,
+  Checkbox,
+  EmptyState,
+  EmptyStateVariant, Title, TitleSizes
+} from '@patternfly/react-core';
 import { style } from 'typestyle';
 import { serverConfig } from '../../config/ServerConfig';
 import history, { URLParam } from '../../app/History';
@@ -11,9 +20,11 @@ import { TimeRange, evalTimeRange, TimeInMilliseconds, isEqualTimeRange } from '
 import * as AlertUtils from '../../utils/AlertUtils';
 import { RenderComponentScroll } from '../../components/Nav/Page';
 import * as MetricsHelper from './Helper';
+import { KioskElement } from "../Kiosk/KioskElement";
 import { MetricsSettings, LabelsSettings } from '../MetricsOptions/MetricsSettings';
 import { MetricsSettingsDropdown } from '../MetricsOptions/MetricsSettingsDropdown';
 import MetricsRawAggregation from '../MetricsOptions/MetricsRawAggregation';
+import { TimeDurationModal } from "../Time/TimeDurationModal";
 import { GrafanaLinks } from './GrafanaLinks';
 import { MetricsObjectTypes } from 'types/Metrics';
 import { SpanOverlay, JaegerLineInfo } from './SpanOverlay';
@@ -22,14 +33,15 @@ import { Overlay } from 'types/Overlay';
 import { Aggregator, DashboardQuery } from 'types/MetricsOptions';
 import { RawOrBucket } from 'types/VictoryChartInfo';
 import { Dashboard } from 'components/Charts/Dashboard';
-import { ThunkDispatch } from 'redux-thunk';
-import { KialiAppAction } from '../../actions/KialiAppAction';
+import { KialiDispatch } from 'types/Redux';
 import { bindActionCreators } from 'redux';
 import { UserSettingsActions } from '../../actions/UserSettingsActions';
 import { timeRangeSelector } from '../../store/Selectors';
+import TimeDurationIndicatorContainer from "../Time/TimeDurationIndicatorComponent";
 
 type MetricsState = {
   dashboard?: DashboardModel;
+  isTimeOptionsOpen: boolean;
   labelsSettings: LabelsSettings;
   grafanaLinks: ExternalLink[];
   spanOverlay?: Overlay<JaegerLineInfo>;
@@ -40,6 +52,7 @@ type MetricsState = {
 type CustomMetricsProps = RouteComponentProps<{}> & {
   namespace: string;
   app: string;
+  lastRefreshAt: TimeInMilliseconds;
   version?: string;
   workload?: string;
   workloadType?: string;
@@ -48,13 +61,13 @@ type CustomMetricsProps = RouteComponentProps<{}> & {
   height?: number;
 };
 
-type Props = CustomMetricsProps & {
-  // Redux props
+type ReduxProps = {
   jaegerIntegration: boolean;
-  lastRefreshAt: TimeInMilliseconds;
   timeRange: TimeRange;
   setTimeRange: (range: TimeRange) => void;
 };
+
+type Props = ReduxProps & CustomMetricsProps;
 
 const fullHeightStyle = style({
   height: '100%'
@@ -69,6 +82,16 @@ const toolbarInputStyle = style({
   }
 });
 
+const emptyStyle = style({
+  display: 'flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  overflow: 'hidden',
+  // fix height + padding
+  height: '350px',
+  textAlign: 'center'
+});
+
 class CustomMetrics extends React.Component<Props, MetricsState> {
   toolbarRef: React.RefObject<HTMLDivElement>;
   options: DashboardQuery;
@@ -81,6 +104,7 @@ class CustomMetrics extends React.Component<Props, MetricsState> {
     this.options = this.initOptions(settings);
     // Initialize active filters from URL
     this.state = {
+      isTimeOptionsOpen: false,
       labelsSettings: settings.labelsSettings,
       grafanaLinks: [],
       tabHeight: 300,
@@ -193,6 +217,18 @@ class CustomMetrics extends React.Component<Props, MetricsState> {
     }
   }
 
+  renderFetchMetrics = (title) => {
+    return (
+      <div className={emptyStyle}>
+        <EmptyState variant={EmptyStateVariant.small}>
+          <Title headingLevel="h5" size={TitleSizes.lg}>
+            {title}
+          </Title>
+        </EmptyState>
+      </div>
+    );
+  };
+
   render() {
     const urlParams = new URLSearchParams(history.location.search);
     const expandedChart = urlParams.get('expand') || undefined;
@@ -221,7 +257,7 @@ class CustomMetrics extends React.Component<Props, MetricsState> {
     const content = (
       <>
         {this.renderOptionsBar()}
-        {this.state.dashboard && dashboard}
+        {this.state.dashboard !== undefined ? dashboard : this.renderFetchMetrics('Loading metrics')}
       </>
     );
 
@@ -236,6 +272,11 @@ class CustomMetrics extends React.Component<Props, MetricsState> {
             </Card>
           </RenderComponentScroll>
         )}
+        <TimeDurationModal
+          customDuration={true}
+          isOpen={this.state.isTimeOptionsOpen}
+          onConfirm={this.toggleTimeOptionsVisibility}
+          onCancel={this.toggleTimeOptionsVisibility} />
       </>
     );
   }
@@ -263,6 +304,8 @@ class CustomMetrics extends React.Component<Props, MetricsState> {
                   direction={this.state.dashboard?.title || 'dashboard'}
                   labelsSettings={this.state.labelsSettings}
                   hasHistograms={hasHistograms}
+                  hasHistogramsAverage={hasHistograms}
+                  hasHistogramsPercentiles={hasHistograms}
                 />
               </ToolbarItem>
             )}
@@ -279,6 +322,11 @@ class CustomMetrics extends React.Component<Props, MetricsState> {
                 onChange={checked => this.onSpans(checked)}
               />
             </ToolbarItem>
+            <KioskElement>
+              <ToolbarItem style={{ marginLeft: 'auto' }}>
+                <TimeDurationIndicatorContainer onClick={this.toggleTimeOptionsVisibility} />
+              </ToolbarItem>
+            </KioskElement>
           </ToolbarGroup>
           <ToolbarGroup style={{ marginLeft: 'auto', paddingRight: '20px' }}>
             <GrafanaLinks
@@ -302,17 +350,20 @@ class CustomMetrics extends React.Component<Props, MetricsState> {
     }
     history.push(history.location.pathname + '?' + urlParams.toString());
   };
+
+  private toggleTimeOptionsVisibility = () => {
+    this.setState(prevState => ({ isTimeOptionsOpen: !prevState.isTimeOptionsOpen }) );
+  };
 }
 
 const mapStateToProps = (state: KialiAppState) => {
   return {
     jaegerIntegration: state.jaegerState.info ? state.jaegerState.info.integration : false,
-    lastRefreshAt: state.globalState.lastRefreshAt,
     timeRange: timeRangeSelector(state)
   };
 };
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => {
+const mapDispatchToProps = (dispatch: KialiDispatch) => {
   return {
     setTimeRange: bindActionCreators(UserSettingsActions.setTimeRange, dispatch)
   };

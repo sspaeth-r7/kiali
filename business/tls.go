@@ -9,6 +9,7 @@ import (
 
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/kubernetes"
+	"github.com/kiali/kiali/log"
 	"github.com/kiali/kiali/models"
 	"github.com/kiali/kiali/observability"
 	"github.com/kiali/kiali/util/mtls"
@@ -55,8 +56,16 @@ func (in *TLSService) MeshWidemTLSStatus(ctx context.Context, namespaces []strin
 		AllowPermissive:     false,
 	}
 
+	minTLS, err := in.businessLayer.IstioCerts.GetTlsMinVersion()
+
+	if err != nil {
+		log.Errorf("Error getting TLM min version: %s ", err)
+	}
+
 	return models.MTLSStatus{
-		Status: mtlsStatus.MeshMtlsStatus().OverallStatus,
+		Status:          mtlsStatus.MeshMtlsStatus().OverallStatus,
+		AutoMTLSEnabled: *in.enabledAutoMtls,
+		MinTLS:          minTLS,
 	}, nil
 }
 
@@ -85,12 +94,11 @@ func (in *TLSService) NamespaceWidemTLSStatus(ctx context.Context, namespace str
 
 	pas := kubernetes.FilterPeerAuthenticationByNamespace(namespace, istioConfigList.PeerAuthentications)
 	if config.IsRootNamespace(namespace) {
-		pas = []security_v1beta1.PeerAuthentication{}
+		pas = []*security_v1beta1.PeerAuthentication{}
 	}
 	drs := kubernetes.FilterDestinationRulesByNamespaces(nss, istioConfigList.DestinationRules)
 
 	mtlsStatus := mtls.MtlsStatus{
-		Namespace:           namespace,
 		PeerAuthentications: pas,
 		DestinationRules:    drs,
 		AutoMtlsEnabled:     in.hasAutoMTLSEnabled(),
@@ -98,12 +106,13 @@ func (in *TLSService) NamespaceWidemTLSStatus(ctx context.Context, namespace str
 	}
 
 	return models.MTLSStatus{
-		Status: mtlsStatus.NamespaceMtlsStatus().OverallStatus,
+		Status:          mtlsStatus.NamespaceMtlsStatus(namespace).OverallStatus,
+		AutoMTLSEnabled: *in.enabledAutoMtls,
 	}, nil
 }
 
 // TODO refactor business/istio_validations.go
-func (in *TLSService) GetAllDestinationRules(ctx context.Context, namespaces []string) ([]networking_v1beta1.DestinationRule, error) {
+func (in *TLSService) GetAllDestinationRules(ctx context.Context, namespaces []string) ([]*networking_v1beta1.DestinationRule, error) {
 	var end observability.EndFunc
 	ctx, end = observability.StartSpan(ctx, "GetAllDestinationRules",
 		observability.Attribute("package", "business"),
@@ -121,7 +130,7 @@ func (in *TLSService) GetAllDestinationRules(ctx context.Context, namespaces []s
 		return nil, err
 	}
 
-	allDestinationRules := make([]networking_v1beta1.DestinationRule, 0)
+	allDestinationRules := make([]*networking_v1beta1.DestinationRule, 0)
 	for _, dr := range istioConfigList.DestinationRules {
 		found := false
 		for _, ns := range namespaces {

@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-20.04
     outputs:
       target_branch: ${{ github.ref_name }}
-      quay_tag: ${{ steps.quay_tag.outputs.quay_tag }}
+      quay_tag: ${{ env.quay_tag }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -39,16 +39,16 @@ jobs:
         else
           QUAY_REPO="${{ github.event.inputs.quay_repository }}"
         fi
-        
-        QUAY_TAG="$QUAY_REPO:latest"
 
-        echo "::set-output name=quay_tag::$QUAY_TAG"
+        QUAY_TAG="$QUAY_REPO:latest"
+        
+        echo "quay_tag=$QUAY_TAG" >> $GITHUB_ENV
 
     - name: Log information
       run: |
         echo "Release type: latest"
 
-        echo "Quay tag": ${{ steps.quay_tag.outputs.quay_tag }}
+        echo "Quay tag": ${{ env.quay_tag }}
 
   build_backend:
     name: Build backend
@@ -80,28 +80,22 @@ jobs:
         ref: ${{ github.event.inputs.release_branch || github.ref_name }}
 
     - name: Set up Go
-      uses: actions/setup-go@v2
+      uses: actions/setup-go@v3
       with:
-        go-version: 1.17.7
-
-    - name: Cache Go deps
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+        go-version-file: go.mod
+        # The builtin cache feature ensures that installing golangci-lint
+        # is consistently fast.
+        cache: true
+        cache-dependency-path: go.sum
 
     - name: Download frontend build
       uses: actions/download-artifact@v3
       with:
         name: build
         path: frontend/build
-    
+
     - name: Build and push image
       run: |
         docker login -u ${{ secrets.QUAY_USER }} -p ${{ secrets.QUAY_PASSWORD }} quay.io
 
-        make -e DOCKER_CLI_EXPERIMENTAL=enabled build-linux-multi-arch container-multi-arch-push-kiali-quay
+        make -e DOCKER_CLI_EXPERIMENTAL=enabled build-linux-multi-arch container-multi-arch-all-push-kiali-quay

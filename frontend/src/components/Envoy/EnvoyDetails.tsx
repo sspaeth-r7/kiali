@@ -25,6 +25,7 @@ import { style } from 'typestyle';
 import AceEditor from 'react-ace';
 import { PFBadge, PFBadges } from 'components/Pf/PfBadges';
 import ToolbarDropdown from 'components/ToolbarDropdown/ToolbarDropdown';
+import { activeTab } from '../../components/Tab/Tabs';
 import { KialiIcon, defaultIconStyle } from 'config/KialiIcon';
 import { aceOptions } from 'types/IstioConfigDetails';
 import { CopyToClipboard } from 'react-copy-to-clipboard';
@@ -33,6 +34,9 @@ import { DashboardRef } from 'types/Runtimes';
 import CustomMetricsContainer from 'components/Metrics/CustomMetrics';
 import { serverConfig } from 'config';
 import { FilterSelected } from 'components/Filters/StatefulFilters';
+import history from '../../app/History';
+import {tabName as workloadTabName, defaultTab as workloadDefaultTab} from '../../pages/WorkloadDetails/WorkloadDetailsPage';
+import { TimeInMilliseconds } from "../../types/Common";
 
 // Enables the search box for the ACEeditor
 require('ace-builds/src-noconflict/ext-searchbox');
@@ -45,14 +49,18 @@ const iconStyle = style({
 });
 
 const envoyTabs = ['clusters', 'listeners', 'routes', 'bootstrap', 'config', 'metrics'];
+const tabName = 'envoyTab'
+const defaultTab = 'clusters'
 
 export type ResourceSorts = { [resource: string]: ISortBy };
 
 type ReduxProps = {
+  kiosk: string;
   namespaces: Namespace[];
 };
 
 type EnvoyDetailsProps = ReduxProps & {
+  lastRefreshAt: TimeInMilliseconds;
   namespace: string;
   workload: Workload;
 };
@@ -84,8 +92,8 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
       config: {},
       tabHeight: 300,
       fetch: true,
-      activeKey: 0,
-      resource: 'clusters',
+      activeKey: envoyTabs.indexOf(activeTab(tabName, defaultTab)),
+      resource: activeTab(tabName, defaultTab),
       tableSortBy: {
         clusters: {
           index: 0,
@@ -108,8 +116,12 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
   }
 
   componentDidUpdate(_prevProps: EnvoyDetailsProps, prevState: EnvoyDetailsState) {
+    const currentTabIndex = envoyTabs.indexOf(activeTab(tabName, defaultTab));
     if (this.state.pod.name !== prevState.pod.name || this.state.resource !== prevState.resource) {
       this.fetchContent();
+      if (currentTabIndex !== this.state.activeKey) {
+        this.setState({ activeKey: currentTabIndex });
+      }
     }
   }
 
@@ -123,6 +135,11 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
         resource: targetResource,
         activeKey: tabIndex
       });
+      const mainTab = new URLSearchParams(history.location.search).get(workloadTabName) || workloadDefaultTab
+      const urlParams = new URLSearchParams('');
+      urlParams.set(tabName, targetResource);
+      urlParams.set(workloadTabName, mainTab);
+      history.push(history.location.pathname + '?' + urlParams.toString());
     }
   };
 
@@ -242,6 +259,7 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
       this.props.namespaces,
       this.props.namespace,
       this.onRouteLinkClick,
+      this.props.kiosk,
       this.props.workload.name
     );
     const SummaryWriterComp = builder[0];
@@ -254,10 +272,11 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
     if (!envoyMetricsDashboardRef) {
       filteredEnvoyTabs = envoyTabs.slice(0, envoyTabs.length - 1);
     }
-    const tabs = filteredEnvoyTabs.map((value, index) => {
+    const tabs = filteredEnvoyTabs.map((value, index) =>
+    {
       const title = value.charAt(0).toUpperCase() + value.slice(1);
       return (
-        <Tab style={{ backgroundColor: 'white' }} key={'tab_' + title} eventKey={index} title={title}>
+        <Tab style={{ backgroundColor: 'white' }} key={'tab_' + value} eventKey={index} title={title}>
           <Card className={fullHeightStyle}>
             <CardBody>
               {this.showEditor() ? (
@@ -301,6 +320,7 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
                 </div>
               ) : this.showMetrics() && envoyMetricsDashboardRef ? (
                 <CustomMetricsContainer
+                  lastRefreshAt={this.props.lastRefreshAt}
                   namespace={this.props.namespace}
                   app={app}
                   version={version}
@@ -308,6 +328,7 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
                   template={envoyMetricsDashboardRef.template}
                   embedded={true}
                   height={this.state.tabHeight - 40 - 24 + 13}
+                  data-test="envoy-metrics-component"
                 />
               ) : (
                 <SummaryWriterComp
@@ -322,8 +343,9 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
             </CardBody>
           </Card>
         </Tab>
-      );
-    });
+      )
+    }
+    );
 
     return (
       <RenderComponentScroll onResize={height => this.setState({ tabHeight: height })}>
@@ -346,6 +368,7 @@ class EnvoyDetails extends React.Component<EnvoyDetailsProps, EnvoyDetailsState>
 }
 
 const mapStateToProps = (state: KialiAppState) => ({
+  kiosk: state.globalState.kiosk,
   namespaces: namespaceItemsSelector(state)!
 });
 

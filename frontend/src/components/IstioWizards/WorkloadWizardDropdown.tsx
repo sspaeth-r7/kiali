@@ -7,7 +7,6 @@ import {
   Tooltip,
   TooltipPosition
 } from '@patternfly/react-core';
-import { CaretDownIcon } from '@patternfly/react-icons';
 import { serverConfig } from '../../config';
 import { Workload } from '../../types/Workload';
 import {
@@ -72,8 +71,7 @@ class WorkloadWizardDropdown extends React.Component<Props, State> {
         const jsonInjectionPatch = buildWorkloadInjectionPatch(
           this.props.workload.type,
           enable,
-          remove,
-          this.props.statusState
+          remove
         );
         API.updateWorkload(this.props.namespace, this.props.workload.name, this.props.workload.type, jsonInjectionPatch)
           .then(_ => {
@@ -204,7 +202,7 @@ class WorkloadWizardDropdown extends React.Component<Props, State> {
         position={DropdownPosition.right}
         onSelect={this.onActionsSelect}
         toggle={
-          <DropdownToggle onToggle={this.onActionsToggle} icon={CaretDownIcon}>
+          <DropdownToggle onToggle={this.onActionsToggle}>
             Actions
           </DropdownToggle>
         }

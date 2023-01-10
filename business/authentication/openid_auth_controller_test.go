@@ -25,13 +25,14 @@ import (
 )
 
 // Token built with the debugger at jwt.io. Subject is system:serviceaccount:k8s_user
-//{
-//"sub": "jdoe@domain.com",
-//"name": "John Doe",
-//"iat": 1516239022,
-//"nonce": "1ba9b834d08ac81feb34e208402eb18e909be084518c328510940184",
-//"exp": 1311281970
-//}
+// {
+//  "sub": "jdoe@domain.com",
+//  "name": "John Doe",
+//  "iat": 1516239022,
+//  "nonce": "1ba9b834d08ac81feb34e208402eb18e909be084518c328510940184",
+//  "exp": 1311281970
+// }
+
 const openIdTestToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqZG9lQGRvbWFpbi5jb20iLCJuYW1lIjoiSm9obiBEb2UiLCJpYXQiOjE1MTYyMzkwMjIsIm5vbmNlIjoiMWJhOWI4MzRkMDhhYzgxZmViMzRlMjA4NDAyZWIxOGU5MDliZTA4NDUxOGMzMjg1MTA5NDAxODQiLCJleHAiOjE2MzgzMTY4MDF9.agHBziXM7SDLBKCnA6BvjWenU1n6juL8Fz3go4MSzyw"
 
 /*** Implicit flow tests ***/
@@ -767,6 +768,7 @@ func TestOpenIdImplicitFlowRejectsTokenNotAcceptedByK8sAPI(t *testing.T) {
 	// Error from API to simulate a bad token
 	k8s := new(kubetest.K8SClientMock)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetKialiToken").Return("")
 	k8s.On("GetNamespaces", "").Return([]v1.Namespace{}, errors.New("token rejected"))
 
@@ -1447,7 +1449,7 @@ func TestOpenIdCodeFlowShouldRejectMissingState(t *testing.T) {
 	cfg.LoginToken.ExpirationSeconds = 1
 	config.Set(cfg)
 
-	uri := fmt.Sprintf("/api/authenticate?code=f0code")
+	uri := "/api/authenticate?code=f0code"
 	request := httptest.NewRequest(http.MethodGet, uri, nil)
 	request.AddCookie(&http.Cookie{
 		Name:  OpenIdNonceCookieName,

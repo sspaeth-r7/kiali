@@ -46,8 +46,10 @@ func (in *IstioValidationsService) GetValidations(ctx context.Context, namespace
 	defer end()
 	// Check if user has access to the namespace (RBAC) in cache scenarios and/or
 	// if namespace is accessible from Kiali (Deployment.AccessibleNamespaces)
-	if _, err := in.businessLayer.Namespace.GetNamespace(ctx, namespace); err != nil {
-		return nil, err
+	if namespace != "" {
+		if _, err := in.businessLayer.Namespace.GetNamespace(ctx, namespace); err != nil {
+			return nil, err
+		}
 	}
 
 	// Ensure the service exists
@@ -83,7 +85,13 @@ func (in *IstioValidationsService) GetValidations(ctx context.Context, namespace
 
 	// We fetch without target service as some validations will require full-namespace details
 	go in.fetchIstioConfigList(ctx, &istioConfigList, &mtlsDetails, &rbacDetails, namespace, errChan, &wg)
-	go in.fetchAllWorkloads(ctx, &workloadsPerNamespace, &namespaces, errChan, &wg)
+
+	if workload != "" {
+		// load only requested workload
+		go in.fetchWorkload(ctx, &workloadsPerNamespace, workload, namespace, errChan, &wg)
+	} else {
+		go in.fetchAllWorkloads(ctx, &workloadsPerNamespace, &namespaces, errChan, &wg)
+	}
 	go in.fetchNonLocalmTLSConfigs(&mtlsDetails, errChan, &wg)
 	if service != "" {
 		go in.fetchServices(ctx, &services, namespace, errChan, &wg)
@@ -98,7 +106,7 @@ func (in *IstioValidationsService) GetValidations(ctx context.Context, namespace
 		}
 	}
 
-	objectCheckers := in.getAllObjectCheckers(namespace, istioConfigList, workloadsPerNamespace, mtlsDetails, rbacDetails, namespaces, registryServices)
+	objectCheckers := in.getAllObjectCheckers(istioConfigList, workloadsPerNamespace, mtlsDetails, rbacDetails, namespaces, registryServices)
 
 	// Get group validations for same kind istio objects
 	validations := runObjectCheckers(objectCheckers)
@@ -117,18 +125,22 @@ func (in *IstioValidationsService) GetValidations(ctx context.Context, namespace
 	return validations, nil
 }
 
-func (in *IstioValidationsService) getAllObjectCheckers(namespace string, istioConfigList models.IstioConfigList, workloadsPerNamespace map[string]models.WorkloadList, mtlsDetails kubernetes.MTLSDetails, rbacDetails kubernetes.RBACDetails, namespaces []models.Namespace, registryServices []*kubernetes.RegistryService) []ObjectChecker {
+func (in *IstioValidationsService) getAllObjectCheckers(istioConfigList models.IstioConfigList, workloadsPerNamespace map[string]models.WorkloadList, mtlsDetails kubernetes.MTLSDetails, rbacDetails kubernetes.RBACDetails, namespaces []models.Namespace, registryServices []*kubernetes.RegistryService) []ObjectChecker {
 	return []ObjectChecker{
-		checkers.NoServiceChecker{Namespace: namespace, Namespaces: namespaces, IstioConfigList: &istioConfigList, WorkloadsPerNamespace: workloadsPerNamespace, AuthorizationDetails: &rbacDetails, RegistryServices: registryServices},
-		checkers.VirtualServiceChecker{Namespace: namespace, Namespaces: namespaces, VirtualServices: istioConfigList.VirtualServices, DestinationRules: istioConfigList.DestinationRules},
+		checkers.NoServiceChecker{Namespaces: namespaces, IstioConfigList: &istioConfigList, WorkloadsPerNamespace: workloadsPerNamespace, AuthorizationDetails: &rbacDetails, RegistryServices: registryServices, PolicyAllowAny: in.isPolicyAllowAny()},
+		checkers.VirtualServiceChecker{Namespaces: namespaces, VirtualServices: istioConfigList.VirtualServices, DestinationRules: istioConfigList.DestinationRules},
 		checkers.DestinationRulesChecker{Namespaces: namespaces, DestinationRules: istioConfigList.DestinationRules, MTLSDetails: mtlsDetails, ServiceEntries: istioConfigList.ServiceEntries},
-		checkers.GatewayChecker{Gateways: istioConfigList.Gateways, Namespace: namespace, WorkloadsPerNamespace: workloadsPerNamespace, IsGatewayToNamespace: in.isGatewayToNamespace()},
-		checkers.PeerAuthenticationChecker{PeerAuthentications: mtlsDetails.PeerAuthentications, MTLSDetails: mtlsDetails, WorkloadList: workloadsPerNamespace[namespace]},
+		checkers.GatewayChecker{Gateways: istioConfigList.Gateways, WorkloadsPerNamespace: workloadsPerNamespace, IsGatewayToNamespace: in.isGatewayToNamespace()},
+		checkers.PeerAuthenticationChecker{PeerAuthentications: mtlsDetails.PeerAuthentications, MTLSDetails: mtlsDetails, WorkloadsPerNamespace: workloadsPerNamespace},
 		checkers.ServiceEntryChecker{ServiceEntries: istioConfigList.ServiceEntries, Namespaces: namespaces, WorkloadEntries: istioConfigList.WorkloadEntries},
-		checkers.AuthorizationPolicyChecker{AuthorizationPolicies: rbacDetails.AuthorizationPolicies, Namespace: namespace, Namespaces: namespaces, ServiceEntries: istioConfigList.ServiceEntries, WorkloadsPerNamespace: workloadsPerNamespace, MtlsDetails: mtlsDetails, VirtualServices: istioConfigList.VirtualServices, RegistryServices: registryServices},
-		checkers.SidecarChecker{Sidecars: istioConfigList.Sidecars, Namespaces: namespaces, WorkloadList: workloadsPerNamespace[namespace], ServiceEntries: istioConfigList.ServiceEntries, RegistryServices: registryServices},
-		checkers.RequestAuthenticationChecker{RequestAuthentications: istioConfigList.RequestAuthentications, WorkloadList: workloadsPerNamespace[namespace]},
-		checkers.WorkloadChecker{Namespace: namespace, AuthorizationPolicies: rbacDetails.AuthorizationPolicies, WorkloadList: workloadsPerNamespace[namespace]},
+		checkers.AuthorizationPolicyChecker{AuthorizationPolicies: rbacDetails.AuthorizationPolicies, Namespaces: namespaces, ServiceEntries: istioConfigList.ServiceEntries, WorkloadsPerNamespace: workloadsPerNamespace, MtlsDetails: mtlsDetails, VirtualServices: istioConfigList.VirtualServices, RegistryServices: registryServices, PolicyAllowAny: in.isPolicyAllowAny()},
+		checkers.SidecarChecker{Sidecars: istioConfigList.Sidecars, Namespaces: namespaces, WorkloadsPerNamespace: workloadsPerNamespace, ServiceEntries: istioConfigList.ServiceEntries, RegistryServices: registryServices},
+		checkers.RequestAuthenticationChecker{RequestAuthentications: istioConfigList.RequestAuthentications, WorkloadsPerNamespace: workloadsPerNamespace},
+		checkers.WorkloadChecker{AuthorizationPolicies: rbacDetails.AuthorizationPolicies, WorkloadsPerNamespace: workloadsPerNamespace},
+		checkers.K8sGatewayChecker{K8sGateways: istioConfigList.K8sGateways},
+		checkers.WasmPluginChecker{WasmPlugins: istioConfigList.WasmPlugins, Namespaces: namespaces},
+		checkers.TelemetryChecker{Telemetries: istioConfigList.Telemetries, Namespaces: namespaces},
+		checkers.K8sHTTPRouteChecker{K8sHTTPRoutes: istioConfigList.K8sHTTPRoutes, K8sGateways: istioConfigList.K8sGateways},
 	}
 }
 
@@ -175,16 +187,16 @@ func (in *IstioValidationsService) GetIstioObjectValidations(ctx context.Context
 	go in.fetchRegistryServices(&registryServices, errChan, &wg)
 	wg.Wait()
 
-	noServiceChecker := checkers.NoServiceChecker{Namespace: namespace, Namespaces: namespaces, IstioConfigList: &istioConfigList, WorkloadsPerNamespace: workloadsPerNamespace, AuthorizationDetails: &rbacDetails, RegistryServices: registryServices}
+	noServiceChecker := checkers.NoServiceChecker{Namespaces: namespaces, IstioConfigList: &istioConfigList, WorkloadsPerNamespace: workloadsPerNamespace, AuthorizationDetails: &rbacDetails, RegistryServices: registryServices, PolicyAllowAny: in.isPolicyAllowAny()}
 
 	switch objectType {
 	case kubernetes.Gateways:
 		objectCheckers = []ObjectChecker{
-			checkers.GatewayChecker{Gateways: istioConfigList.Gateways, Namespace: namespace, WorkloadsPerNamespace: workloadsPerNamespace, IsGatewayToNamespace: in.isGatewayToNamespace()},
+			checkers.GatewayChecker{Gateways: istioConfigList.Gateways, WorkloadsPerNamespace: workloadsPerNamespace, IsGatewayToNamespace: in.isGatewayToNamespace()},
 		}
 		referenceChecker = references.GatewayReferences{Gateways: istioConfigList.Gateways, VirtualServices: istioConfigList.VirtualServices, WorkloadsPerNamespace: workloadsPerNamespace}
 	case kubernetes.VirtualServices:
-		virtualServiceChecker := checkers.VirtualServiceChecker{Namespace: namespace, Namespaces: namespaces, VirtualServices: istioConfigList.VirtualServices, DestinationRules: istioConfigList.DestinationRules}
+		virtualServiceChecker := checkers.VirtualServiceChecker{Namespaces: namespaces, VirtualServices: istioConfigList.VirtualServices, DestinationRules: istioConfigList.DestinationRules}
 		objectCheckers = []ObjectChecker{noServiceChecker, virtualServiceChecker}
 		referenceChecker = references.VirtualServiceReferences{Namespace: namespace, Namespaces: namespaces, VirtualServices: istioConfigList.VirtualServices, DestinationRules: istioConfigList.DestinationRules, AuthorizationPolicies: rbacDetails.AuthorizationPolicies}
 	case kubernetes.DestinationRules:
@@ -197,18 +209,18 @@ func (in *IstioValidationsService) GetIstioObjectValidations(ctx context.Context
 		referenceChecker = references.ServiceEntryReferences{AuthorizationPolicies: rbacDetails.AuthorizationPolicies, Namespace: namespace, Namespaces: namespaces, DestinationRules: istioConfigList.DestinationRules, ServiceEntries: istioConfigList.ServiceEntries, Sidecars: istioConfigList.Sidecars, RegistryServices: registryServices}
 	case kubernetes.Sidecars:
 		sidecarsChecker := checkers.SidecarChecker{Sidecars: istioConfigList.Sidecars, Namespaces: namespaces,
-			WorkloadList: workloadsPerNamespace[namespace], ServiceEntries: istioConfigList.ServiceEntries, RegistryServices: registryServices}
+			WorkloadsPerNamespace: workloadsPerNamespace, ServiceEntries: istioConfigList.ServiceEntries, RegistryServices: registryServices}
 		objectCheckers = []ObjectChecker{sidecarsChecker}
 		referenceChecker = references.SidecarReferences{Sidecars: istioConfigList.Sidecars, Namespace: namespace, Namespaces: namespaces, ServiceEntries: istioConfigList.ServiceEntries, RegistryServices: registryServices, WorkloadsPerNamespace: workloadsPerNamespace}
 	case kubernetes.AuthorizationPolicies:
 		authPoliciesChecker := checkers.AuthorizationPolicyChecker{AuthorizationPolicies: rbacDetails.AuthorizationPolicies,
-			Namespace: namespace, Namespaces: namespaces, ServiceEntries: istioConfigList.ServiceEntries,
-			WorkloadsPerNamespace: workloadsPerNamespace, MtlsDetails: mtlsDetails, VirtualServices: istioConfigList.VirtualServices, RegistryServices: registryServices}
+			Namespaces: namespaces, ServiceEntries: istioConfigList.ServiceEntries,
+			WorkloadsPerNamespace: workloadsPerNamespace, MtlsDetails: mtlsDetails, VirtualServices: istioConfigList.VirtualServices, RegistryServices: registryServices, PolicyAllowAny: in.isPolicyAllowAny()}
 		objectCheckers = []ObjectChecker{authPoliciesChecker}
 		referenceChecker = references.AuthorizationPolicyReferences{AuthorizationPolicies: rbacDetails.AuthorizationPolicies, Namespace: namespace, Namespaces: namespaces, VirtualServices: istioConfigList.VirtualServices, ServiceEntries: istioConfigList.ServiceEntries, RegistryServices: registryServices, WorkloadsPerNamespace: workloadsPerNamespace}
 	case kubernetes.PeerAuthentications:
 		// Validations on PeerAuthentications
-		peerAuthnChecker := checkers.PeerAuthenticationChecker{PeerAuthentications: mtlsDetails.PeerAuthentications, MTLSDetails: mtlsDetails, WorkloadList: workloadsPerNamespace[namespace]}
+		peerAuthnChecker := checkers.PeerAuthenticationChecker{PeerAuthentications: mtlsDetails.PeerAuthentications, MTLSDetails: mtlsDetails, WorkloadsPerNamespace: workloadsPerNamespace}
 		objectCheckers = []ObjectChecker{peerAuthnChecker}
 		referenceChecker = references.PeerAuthReferences{MTLSDetails: mtlsDetails, WorkloadsPerNamespace: workloadsPerNamespace}
 	case kubernetes.WorkloadEntries:
@@ -217,10 +229,22 @@ func (in *IstioValidationsService) GetIstioObjectValidations(ctx context.Context
 		// Validation on WorkloadGroups are not yet in place
 	case kubernetes.RequestAuthentications:
 		// Validation on RequestAuthentications are not yet in place
-		requestAuthnChecker := checkers.RequestAuthenticationChecker{RequestAuthentications: istioConfigList.RequestAuthentications, WorkloadList: workloadsPerNamespace[namespace]}
+		requestAuthnChecker := checkers.RequestAuthenticationChecker{RequestAuthentications: istioConfigList.RequestAuthentications, WorkloadsPerNamespace: workloadsPerNamespace}
 		objectCheckers = []ObjectChecker{requestAuthnChecker}
 	case kubernetes.EnvoyFilters:
 		// Validation on EnvoyFilters are not yet in place
+	case kubernetes.WasmPlugins:
+		// Validation on WasmPlugins is not expected
+	case kubernetes.Telemetries:
+		// Validation on Telemetries is not expected
+	case kubernetes.K8sGateways:
+		// Validations on K8sGateways
+		objectCheckers = []ObjectChecker{
+			checkers.K8sGatewayChecker{K8sGateways: istioConfigList.K8sGateways},
+		}
+	case kubernetes.K8sHTTPRoutes:
+		httpRouteChecker := checkers.K8sHTTPRouteChecker{K8sHTTPRoutes: istioConfigList.K8sHTTPRoutes, K8sGateways: istioConfigList.K8sGateways}
+		objectCheckers = []ObjectChecker{noServiceChecker, httpRouteChecker}
 	default:
 		err = fmt.Errorf("object type not found: %v", objectType)
 	}
@@ -304,7 +328,7 @@ func (in *IstioValidationsService) fetchAllWorkloads(ctx context.Context, rValue
 
 		allWorkloads := map[string]models.WorkloadList{}
 		for _, ns := range nss {
-			criteria := WorkloadCriteria{Namespace: ns.Name, IncludeIstioResources: true, IncludeHealth: false}
+			criteria := WorkloadCriteria{Namespace: ns.Name, IncludeIstioResources: false, IncludeHealth: false}
 			workloadList, err := in.businessLayer.Workload.GetWorkloadList(ctx, criteria)
 			if err != nil {
 				select {
@@ -314,6 +338,24 @@ func (in *IstioValidationsService) fetchAllWorkloads(ctx context.Context, rValue
 			} else {
 				allWorkloads[ns.Name] = workloadList
 			}
+		}
+		*rValue = allWorkloads
+	}
+}
+
+func (in *IstioValidationsService) fetchWorkload(ctx context.Context, rValue *map[string]models.WorkloadList, workload, namespace string, errChan chan error, wg *sync.WaitGroup) {
+	defer wg.Done()
+	if len(errChan) == 0 {
+		allWorkloads := map[string]models.WorkloadList{}
+		criteria := WorkloadCriteria{WorkloadName: workload, Namespace: namespace, IncludeIstioResources: true, IncludeHealth: false}
+		workloadList, err := in.businessLayer.Workload.GetWorkloadList(ctx, criteria)
+		if err != nil {
+			select {
+			case errChan <- err:
+			default:
+			}
+		} else {
+			allWorkloads[namespace] = workloadList
 		}
 		*rValue = allWorkloads
 	}
@@ -336,6 +378,8 @@ func (in *IstioValidationsService) fetchIstioConfigList(ctx context.Context, rVa
 		IncludeWorkloadEntries:        true,
 		IncludeAuthorizationPolicies:  true,
 		IncludePeerAuthentications:    true,
+		IncludeK8sHTTPRoutes:          true,
+		IncludeK8sGateways:            true,
 	}
 	istioConfigList, err := in.businessLayer.IstioConfig.GetIstioConfigList(ctx, criteria)
 	if err != nil {
@@ -356,7 +400,13 @@ func (in *IstioValidationsService) fetchIstioConfigList(ctx context.Context, rVa
 	rValue.ServiceEntries = append(rValue.ServiceEntries, filteredSEs...)
 
 	// All Gateways
-	rValue.Gateways = append(rValue.Gateways, istioConfigList.Gateways...)
+	rValue.Gateways = append(rValue.Gateways, kubernetes.FilterAutogeneratedGateways(istioConfigList.Gateways)...)
+
+	// All K8sGateways
+	rValue.K8sGateways = append(rValue.K8sGateways, kubernetes.FilterSupportedK8sGateways(istioConfigList.K8sGateways)...)
+
+	// All K8sHTTPRoutes
+	rValue.K8sHTTPRoutes = append(rValue.K8sHTTPRoutes, istioConfigList.K8sHTTPRoutes...)
 
 	// All Sidecars
 	rValue.Sidecars = append(rValue.Sidecars, istioConfigList.Sidecars...)
@@ -367,34 +417,43 @@ func (in *IstioValidationsService) fetchIstioConfigList(ctx context.Context, rVa
 	// All WorkloadEntries
 	rValue.WorkloadEntries = append(rValue.WorkloadEntries, istioConfigList.WorkloadEntries...)
 
+	// All K8sGateways
+	rValue.K8sGateways = append(rValue.K8sGateways, istioConfigList.K8sGateways...)
+
 	in.filterPeerAuths(namespace, mtlsDetails, istioConfigList.PeerAuthentications)
 
 	in.filterAuthPolicies(namespace, rbacDetails, istioConfigList.AuthorizationPolicies)
 }
 
-func (in *IstioValidationsService) filterPeerAuths(namespace string, mtlsDetails *kubernetes.MTLSDetails, peerAuths []security_v1beta.PeerAuthentication) {
+func (in *IstioValidationsService) filterPeerAuths(namespace string, mtlsDetails *kubernetes.MTLSDetails, peerAuths []*security_v1beta.PeerAuthentication) {
 	rootNs := config.Get().ExternalServices.Istio.RootNamespace
 	for _, pa := range peerAuths {
 		if pa.Namespace == rootNs {
 			mtlsDetails.MeshPeerAuthentications = append(mtlsDetails.MeshPeerAuthentications, pa)
 		}
-		if pa.Namespace == namespace {
+		if pa.Namespace == namespace || namespace == "" {
 			mtlsDetails.PeerAuthentications = append(mtlsDetails.PeerAuthentications, pa)
 		}
 	}
 }
 
-func (in *IstioValidationsService) filterAuthPolicies(namespace string, rbacDetails *kubernetes.RBACDetails, authPolicies []security_v1beta.AuthorizationPolicy) {
+func (in *IstioValidationsService) filterAuthPolicies(namespace string, rbacDetails *kubernetes.RBACDetails, authPolicies []*security_v1beta.AuthorizationPolicy) {
 	for _, ap := range authPolicies {
-		if ap.Namespace == namespace {
+		if ap.Namespace == namespace || namespace == "" {
 			rbacDetails.AuthorizationPolicies = append(rbacDetails.AuthorizationPolicies, ap)
 		}
 	}
 }
 
-func (in *IstioValidationsService) filterVSExportToNamespaces(namespace string, vs []networking_v1beta1.VirtualService) []networking_v1beta1.VirtualService {
-	var result []networking_v1beta1.VirtualService
+func (in *IstioValidationsService) filterVSExportToNamespaces(namespace string, vs []*networking_v1beta1.VirtualService) []*networking_v1beta1.VirtualService {
+	if namespace == "" {
+		return kubernetes.FilterAutogeneratedVirtualServices(vs)
+	}
+	var result []*networking_v1beta1.VirtualService
 	for _, v := range vs {
+		if kubernetes.IsAutogenerated(v.Name) {
+			continue
+		}
 		if len(v.Spec.ExportTo) > 0 {
 			for _, exportToNs := range v.Spec.ExportTo {
 				// take only namespaces where it is exported to, or if it is exported to all namespaces, or export to own namespace
@@ -410,8 +469,11 @@ func (in *IstioValidationsService) filterVSExportToNamespaces(namespace string, 
 	return result
 }
 
-func (in *IstioValidationsService) filterDRExportToNamespaces(namespace string, dr []networking_v1beta1.DestinationRule) []networking_v1beta1.DestinationRule {
-	var result []networking_v1beta1.DestinationRule
+func (in *IstioValidationsService) filterDRExportToNamespaces(namespace string, dr []*networking_v1beta1.DestinationRule) []*networking_v1beta1.DestinationRule {
+	if namespace == "" {
+		return dr
+	}
+	var result []*networking_v1beta1.DestinationRule
 	for _, d := range dr {
 		if len(d.Spec.ExportTo) > 0 {
 			for _, exportToNs := range d.Spec.ExportTo {
@@ -428,8 +490,11 @@ func (in *IstioValidationsService) filterDRExportToNamespaces(namespace string, 
 	return result
 }
 
-func (in *IstioValidationsService) filterSEExportToNamespaces(namespace string, se []networking_v1beta1.ServiceEntry) []networking_v1beta1.ServiceEntry {
-	var result []networking_v1beta1.ServiceEntry
+func (in *IstioValidationsService) filterSEExportToNamespaces(namespace string, se []*networking_v1beta1.ServiceEntry) []*networking_v1beta1.ServiceEntry {
+	if namespace == "" {
+		return se
+	}
+	var result []*networking_v1beta1.ServiceEntry
 	for _, s := range se {
 		if len(s.Spec.ExportTo) > 0 {
 			for _, exportToNs := range s.Spec.ExportTo {
@@ -501,6 +566,18 @@ func (in *IstioValidationsService) isGatewayToNamespace() bool {
 		}
 	}
 	return gatewayToNamespace
+}
+
+func (in *IstioValidationsService) isPolicyAllowAny() bool {
+	allowAny := false
+	if in.businessLayer != nil {
+		if otp, err := in.businessLayer.Mesh.OutboundTrafficPolicy(); err == nil {
+			if otp.Mode == "" || otp.Mode == AllowAny {
+				return true
+			}
+		}
+	}
+	return allowAny
 }
 
 func checkExportTo(exportToNs string, namespace string, ownNs string) bool {

@@ -32,6 +32,11 @@ Feature: Kiali Apps List page
     And user sees "kiali-traffic-generator"
 
   @apps-page
+  Scenario: Filter workloads table by Istio Sidecar not being present
+    When the user filters by "Istio Sidecar" for "Not Present"
+    Then user cannot see any apps in the table
+
+  @apps-page
   Scenario: Filter Apps by Istio Type
     When the user filters by "Istio Type" for "VirtualService"
     Then user only sees "productpage"
@@ -58,7 +63,7 @@ Feature: Kiali Apps List page
   Scenario: The idle status of a logical mesh application is reported in the list of applications
     Given an idle application in the cluster
     When I fetch the list of applications
-    And user selects the "default" namespace
+    And user selects the "sleep" namespace
     Then the application should be listed as "idle"
     And the health status of the application should be "Not Ready"
 

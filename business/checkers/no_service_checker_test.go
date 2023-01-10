@@ -17,7 +17,6 @@ func TestNoCrashOnEmpty(t *testing.T) {
 	assert := assert.New(t)
 
 	typeValidations := NoServiceChecker{
-		Namespace:        "test",
 		IstioConfigList:  emptyIstioConfigList(),
 		RegistryServices: data.CreateEmptyRegistryServices(),
 	}.Check()
@@ -32,7 +31,6 @@ func TestAllIstioObjectWithServices(t *testing.T) {
 	assert := assert.New(t)
 
 	vals := NoServiceChecker{
-		Namespace: "test",
 		WorkloadsPerNamespace: map[string]models.WorkloadList{
 			"test": data.CreateWorkloadList("test",
 				data.CreateWorkloadListItem("reviewsv1", appVersionLabel("reviews", "v1")),
@@ -64,7 +62,6 @@ func TestDetectObjectWithoutService(t *testing.T) {
 	assert := assert.New(t)
 
 	vals := NoServiceChecker{
-		Namespace:       "test",
 		IstioConfigList: fakeIstioConfigList(),
 		WorkloadsPerNamespace: map[string]models.WorkloadList{
 			"test": data.CreateWorkloadList("test",
@@ -89,7 +86,6 @@ func TestDetectObjectWithoutService(t *testing.T) {
 	assert.NoError(validations.ConfirmIstioCheckMessage("destinationrules.nodest.matchingregistry", customerDr.Checks[0]))
 
 	vals = NoServiceChecker{
-		Namespace: "test",
 		WorkloadsPerNamespace: map[string]models.WorkloadList{
 			"test": data.CreateWorkloadList("test",
 				data.CreateWorkloadListItem("reviewsv1", appVersionLabel("reviews", "v1")),
@@ -115,7 +111,6 @@ func TestDetectObjectWithoutService(t *testing.T) {
 	assert.NoError(validations.ConfirmIstioCheckMessage("virtualservices.nohost.hostnotfound", productVs.Checks[1]))
 
 	vals = NoServiceChecker{
-		Namespace: "test",
 		WorkloadsPerNamespace: map[string]models.WorkloadList{
 			"test": data.CreateWorkloadList("test",
 				data.CreateWorkloadListItem("reviewsv1", appVersionLabel("reviews", "v1")),
@@ -134,7 +129,6 @@ func TestDetectObjectWithoutService(t *testing.T) {
 	assert.True(vals[models.IstioValidationKey{ObjectType: "destinationrule", Namespace: "test", Name: "customer-dr"}].Valid)
 
 	vals = NoServiceChecker{
-		Namespace: "test",
 		WorkloadsPerNamespace: map[string]models.WorkloadList{
 			"test": data.CreateWorkloadList("test",
 				data.CreateWorkloadListItem("productv1", appVersionLabel("product", "v1")),
@@ -164,7 +158,6 @@ func TestObjectWithoutGateway(t *testing.T) {
 
 	istioDetails.VirtualServices[0].Spec.Gateways = gateways
 	vals := NoServiceChecker{
-		Namespace:            "test",
 		IstioConfigList:      istioDetails,
 		RegistryServices:     data.CreateFakeMultiRegistryServices([]string{"reviews.test.svc.cluster.local", "product.test.svc.cluster.local", "customer.test.svc.cluster.local"}, "test", "*"),
 		AuthorizationDetails: &kubernetes.RBACDetails{},
@@ -185,15 +178,15 @@ func emptyIstioConfigList() *models.IstioConfigList {
 func fakeIstioConfigList() *models.IstioConfigList {
 	result := models.IstioConfigList{}
 
-	result.VirtualServices = []networking_v1beta1.VirtualService{
-		*data.AddHttpRoutesToVirtualService(data.CreateHttpRouteDestination("product", "v1", -1),
+	result.VirtualServices = []*networking_v1beta1.VirtualService{
+		data.AddHttpRoutesToVirtualService(data.CreateHttpRouteDestination("product", "v1", -1),
 			data.AddTcpRoutesToVirtualService(data.CreateTcpRoute("product", "v1", -1),
 				data.CreateEmptyVirtualService("product-vs", "test", []string{"product"}),
 			),
 		)}
 
-	result.DestinationRules = []networking_v1beta1.DestinationRule{
-		*data.CreateEmptyDestinationRule("test", "customer-dr", "customer"),
+	result.DestinationRules = []*networking_v1beta1.DestinationRule{
+		data.CreateEmptyDestinationRule("test", "customer-dr", "customer"),
 	}
 	return &result
 }

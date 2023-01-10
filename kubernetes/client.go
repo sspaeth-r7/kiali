@@ -15,9 +15,11 @@ import (
 	kube "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd/api"
+	gatewayapiclient "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 
 	kialiConfig "github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/log"
+	"github.com/kiali/kiali/util/httputil"
 )
 
 const RemoteSecretData = "/kiali-remote-secret/kiali"
@@ -37,6 +39,7 @@ type ClientInterface interface {
 	GetToken() string
 	GetAuthInfo() *api.AuthInfo
 	IsOpenShift() bool
+	IsGatewayAPI() bool
 	K8SClientInterface
 	IstioClientInterface
 	OSClientInterface
@@ -47,18 +50,24 @@ type ClientInterface interface {
 type K8SClient struct {
 	ClientInterface
 	token          string
-	k8s            *kube.Clientset
-	istioClientset *istio.Clientset
+	k8s            kube.Interface
+	istioClientset istio.Interface
 	// Used in REST queries after bump to client-go v0.20.x
 	ctx context.Context
 	// isOpenShift private variable will check if kiali is deployed under an OpenShift cluster or not
 	// It is represented as a pointer to include the initialization phase.
 	// See kubernetes_service.go#IsOpenShift() for more details.
 	isOpenShift *bool
+	// isGatewayAPI private variable will check if K8s Gateway API CRD exists on cluster or not
+	isGatewayAPI *bool
+	gatewayapi   gatewayapiclient.Interface
+
+	// Separated out for testing purposes
+	getPodPortForwarderFunc func(namespace, name, portMap string) (httputil.PortForwarder, error)
 }
 
 // GetK8sApi returns the clientset referencing all K8s rest clients
-func (client *K8SClient) GetK8sApi() *kube.Clientset {
+func (client *K8SClient) GetK8sApi() kube.Interface {
 	return client.k8s
 }
 
@@ -81,7 +90,7 @@ func UseRemoteCreds(remoteSecret *RemoteSecret) (*rest.Config, error) {
 
 	serverParse := strings.Split(remoteSecret.Clusters[0].Cluster.Server, ":")
 	if len(serverParse) != 3 && len(serverParse) != 2 {
-		return nil, errors.New("Invalid remote API server URL")
+		return nil, errors.New("invalid remote API server URL")
 	}
 	host := strings.TrimPrefix(serverParse[1], "//")
 
@@ -91,7 +100,7 @@ func UseRemoteCreds(remoteSecret *RemoteSecret) (*rest.Config, error) {
 	}
 
 	if !strings.EqualFold(serverParse[0], "https") {
-		return nil, errors.New("Only HTTPS protocol is allowed in remote API server URL")
+		return nil, errors.New("only HTTPS protocol is allowed in remote API server URL")
 	}
 
 	// There's no need to add the BearerToken because it's ignored later on
@@ -157,6 +166,20 @@ func NewClientFromConfig(config *rest.Config) (*K8SClient, error) {
 		return nil, err
 	}
 
+	client.gatewayapi, err = gatewayapiclient.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
 	client.ctx = context.Background()
 	return &client, nil
+}
+
+// NewClient is just used for testing purposes.
+func NewClient(kubeClient kube.Interface, istioClient istio.Interface, gatewayapiClient gatewayapiclient.Interface) *K8SClient {
+	return &K8SClient{
+		istioClientset: istioClient,
+		k8s:            kubeClient,
+		gatewayapi:     gatewayapiClient,
+	}
 }

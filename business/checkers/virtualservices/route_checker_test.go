@@ -17,9 +17,8 @@ func TestServiceWellVirtualServiceValidation(t *testing.T) {
 
 	// Setup mocks
 	vals, valid := RouteChecker{
-		Namespace:      "test",
 		Namespaces:     []string{"test"},
-		VirtualService: *fakeValidVirtualService(),
+		VirtualService: fakeValidVirtualService(),
 	}.Check()
 
 	// Well configured object
@@ -32,9 +31,8 @@ func TestServiceMultipleChecks(t *testing.T) {
 	assert := assert.New(t)
 
 	vals, valid := RouteChecker{
-		Namespace:      "test",
 		Namespaces:     []string{"test"},
-		VirtualService: *fakeOneRouteUnder100(),
+		VirtualService: fakeOneRouteUnder100(),
 	}.Check()
 
 	// wrong weight'ed route rule
@@ -50,9 +48,8 @@ func TestVSWithRepeatingSubsets(t *testing.T) {
 	assert := assert.New(t)
 
 	vals, valid := RouteChecker{
-		Namespace:      "test",
 		Namespaces:     []string{"test"},
-		VirtualService: *fakeRepeatedSubset(),
+		VirtualService: fakeRepeatedSubset(),
 	}.Check()
 	assert.True(valid)
 	assert.NotEmpty(vals)
@@ -69,9 +66,8 @@ func TestVSWithRepeatingHostsNoSubsets(t *testing.T) {
 	assert := assert.New(t)
 
 	vals, valid := RouteChecker{
-		Namespace:      "test",
 		Namespaces:     []string{"test"},
-		VirtualService: *fakeRepeatedHosts(),
+		VirtualService: fakeRepeatedHosts(),
 	}.Check()
 	assert.True(valid)
 	assert.NotEmpty(vals)

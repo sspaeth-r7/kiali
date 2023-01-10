@@ -16,7 +16,7 @@
 # CLIENT_EXE_NAME must be either "oc" or "kubectl"
 ADDONS="prometheus grafana jaeger"
 CLIENT_EXE_NAME="oc"
-CLUSTER_NAME="cluster-default"
+CLUSTER_NAME=""
 CONFIG_PROFILE="" # see "istioctl profile list" for valid values. See: https://istio.io/docs/setup/additional-setup/config-profiles/
 DELETE_ISTIO="false"
 PURGE_UNINSTALL="true"
@@ -24,10 +24,12 @@ ISTIOCTL=
 ISTIO_DIR=
 ISTIO_EGRESSGATEWAY_ENABLED="true"
 ISTIO_INGRESSGATEWAY_ENABLED="true"
-MESH_ID="mesh-default"
+ISTIO_VERSION=""
+MESH_ID=""
 MTLS="true"
 NAMESPACE="istio-system"
-NETWORK="network-default"
+NETWORK=""
+REDUCE_RESOURCES="false"
 IMAGE_HUB="gcr.io/istio-release"
 IMAGE_TAG="default"
 
@@ -99,6 +101,10 @@ while [[ $# -gt 0 ]]; do
       fi
       shift;shift
       ;;
+    -iv|--istio-version)
+      ISTIO_VERSION="$2"
+      shift;shift
+      ;;
     -ih|--image-hub)
       IMAGE_HUB="$2"
       shift;shift
@@ -128,6 +134,15 @@ while [[ $# -gt 0 ]]; do
       NETWORK="$2"
       shift;shift
       ;;
+    -rr|--reduce-resources)
+      if [ "${2}" == "true" ] || [ "${2}" == "false" ]; then
+        REDUCE_RESOURCES="$2"
+      else
+        echo "ERROR: The --reduce-resources flag must be 'true' or 'false'"
+        exit 1
+      fi
+      shift;shift
+      ;;
     -s|--set)
       CUSTOM_INSTALL_SETTINGS="${CUSTOM_INSTALL_SETTINGS} --set $2"
       shift;shift
@@ -148,7 +163,7 @@ Valid command line arguments:
        This value overrides any other value set with --client-exe
   -cn|--cluster-name <cluster name>:
        Installs istio as part of cluster with the given name.
-       Default: cluster-default
+       Default: unset (use Istio default of "Kubernetes")
   -cp|--config-profile <profile name>:
        Installs Istio with the given profile.
        Run "istioctl profile list" to see the valid list of configuration profiles available.
@@ -183,18 +198,25 @@ Valid command line arguments:
        unless you know the image tag you are pulling is compatible with the charts in the istioctl installer.
        You will need this if you have a dev version of istioctl but want to pull a released version of the images.
        Default: "default"
+  -iv|--istio-version <version>:
+       The Istio version to install. This is ignored if --istio-dir is specified.
   -m|--mtls (true|false):
        Indicate if you want global MTLS auto enabled.
        Default: true
   -mid|--mesh-id <mesh ID>:
        Installs istio as part of mesh with the given name.
-       Default: mesh-default
+       Default: unset
   -n|--namespace <name>:
        Install Istio in this namespace.
        Default: istio-system
   -net|--network <network>:
        Installs istio as part of network with the given name.
-       Default: network-default
+       Default: unset
+  -rr|--reduce-resources (true|false):
+       When true some Istio components (such as the sidecar proxies) will be given
+       a smaller amount of resources (CPU and memory) which will allow you
+       to run Istio on a cluster that does not have a large amount of resources.
+       Default: false
   -s|--set <name=value>:
        Sets a name/value pair for a custom install setting. Some examples you may want to use:
        --set installPackagePath=/git/clone/istio.io/installer
@@ -233,16 +255,28 @@ if [ "${ISTIO_DIR}" == "" ]; then
   # Go to the main output directory and try to find an Istio there.
   HACK_SCRIPT_DIR="$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)"
   OUTPUT_DIR="${OUTPUT_DIR:-${HACK_SCRIPT_DIR}/../../_output}"
-  ALL_ISTIOS=$(ls -dt1 ${OUTPUT_DIR}/istio-*)
-  if [ "$?" != "0" ]; then
-    ${HACK_SCRIPT_DIR}/download-istio.sh
+  if [ "${ISTIO_VERSION}" == "" ]; then
+    ALL_ISTIOS=$(ls -dt1 ${OUTPUT_DIR}/istio-*)
     if [ "$?" != "0" ]; then
-      echo "ERROR: You do not have Istio installed and it cannot be downloaded."
-      exit 1
+      ${HACK_SCRIPT_DIR}/download-istio.sh
+      if [ "$?" != "0" ]; then
+        echo "ERROR: You do not have Istio installed and it cannot be downloaded."
+        exit 1
+      fi
+    fi
+    # install the Istio release that was last downloaded (that's the -t option to ls)
+    ISTIO_DIR=$(ls -dt1 ${OUTPUT_DIR}/istio-* | head -n1)
+  else
+    ISTIO_DIR=$(ls -dt1 ${OUTPUT_DIR}/istio-${ISTIO_VERSION} | head -n1)
+    if [ ! -d "${ISTIO_DIR}" ]; then
+      ${HACK_SCRIPT_DIR}/download-istio.sh --istio-version ${ISTIO_VERSION}
+      if [ "$?" != "0" ]; then
+        echo "ERROR: You do not have Istio [${ISTIO_VERSION}] installed and it cannot be downloaded."
+        exit 1
+      fi
+      ISTIO_DIR=$(ls -dt1 ${OUTPUT_DIR}/istio-${ISTIO_VERSION} | head -n1)
     fi
   fi
-  # install the Istio release that was last downloaded (that's the -t option to ls)
-  ISTIO_DIR=$(ls -dt1 ${OUTPUT_DIR}/istio-* | head -n1)
 fi
 
 if [ ! -d "${ISTIO_DIR}" ]; then
@@ -313,6 +347,16 @@ if [ "${NAMESPACE}" != "istio-system" ]; then
   fi
 fi
 
+if [ "${REDUCE_RESOURCES}" == "true" ]; then
+  REDUCE_RESOURCES_OPTIONS=" \
+    --set values.global.proxy.resources.requests.cpu=1m \
+    --set values.global.proxy.resources.requests.memory=1Mi \
+    --set values.global.proxy_init.resources.requests.cpu=1m \
+    --set values.global.proxy_init.resources.requests.memory=1Mi \
+    --set components.pilot.k8s.resources.requests.cpu=1m \
+    --set components.pilot.k8s.resources.requests.memory=1Mi"
+fi
+
 for s in \
    "${IMAGE_HUB_OPTION}" \
    "${IMAGE_TAG_OPTION}" \
@@ -325,6 +369,7 @@ for s in \
    "--set values.global.network=${NETWORK}" \
    "--set values.meshConfig.accessLogFile=/dev/stdout" \
    "${CNI_OPTIONS}" \
+   "${REDUCE_RESOURCES_OPTIONS}" \
    "${CUSTOM_INSTALL_SETTINGS}"
 do
   MANIFEST_CONFIG_SETTINGS_TO_APPLY="${MANIFEST_CONFIG_SETTINGS_TO_APPLY} ${s}"

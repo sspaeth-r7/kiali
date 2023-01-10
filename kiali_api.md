@@ -3,6 +3,10 @@
 
 # Kiali
 Kiali project, observability for the Istio service mesh
+
+NOTE! The Kiali API is not for public use and is not supported for any use outside of the Kiali UI itself.
+The API can and will change from version to version with no guarantee of backwards compatibility.
+
   
 
 ## Informations
@@ -6965,6 +6969,7 @@ The exact format is defined in sigs.k8s.io/structured-merge-diff
 |------|------|---------|:--------:| ------- |-------------|---------|
 | egressInfo | [GWInfoIngress](#g-w-info-ingress)| `GWInfoIngress` |  | |  |  |
 | ingressInfo | [GWInfoIngress](#g-w-info-ingress)| `GWInfoIngress` |  | |  |  |
+| gatewayAPIInfo | [GWInfoIngress](#g-w-info-ingress)| `GWInfoIngress` |  | |  |  |
 
 
 

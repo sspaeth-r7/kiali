@@ -5,7 +5,7 @@
 # If using OpenShift, you must expose the image registry externally.
 #
 
-.prepare-ocp-image-registry: .ensure-oc-exists
+.prepare-ocp-image-registry: .ensure-oc-login
 	@if [ "$(shell ${OC} get config.imageregistry.operator.openshift.io/cluster -o jsonpath='{.spec.managementState}')" != "Managed" ]; then echo "Manually patching image registry operator to ensure it is managed"; ${OC} patch configs.imageregistry.operator.openshift.io cluster --type merge --patch '{"spec":{"managementState":"Managed"}}'; sleep 3; fi
 	@if [ "$(shell ${OC} get config.imageregistry.operator.openshift.io/cluster -o jsonpath='{.spec.defaultRoute}')" != "true" ]; then echo "Manually patching image registry operator to expose the cluster internal image registry"; ${OC} patch config.imageregistry.operator.openshift.io/cluster --patch '{"spec":{"defaultRoute":true}}' --type=merge; sleep 3; routehost="$$(${OC} get image.config.openshift.io/cluster -o custom-columns=EXT:.status.externalRegistryHostnames[0] --no-headers 2>/dev/null)"; while [ "$${routehost}" == "<none>" -o "$${routehost}" == "" ]; do echo "Waiting for image registry route to start..."; sleep 3; routehost="$$(${OC} get image.config.openshift.io/cluster -o custom-columns=EXT:.status.externalRegistryHostnames[0] --no-headers 2>/dev/null)"; done; fi
 
@@ -29,8 +29,6 @@
 	@${OC} get namespace ${OPERATOR_IMAGE_NAMESPACE} &> /dev/null || \
 	  ${OC} create namespace ${OPERATOR_IMAGE_NAMESPACE} &> /dev/null
 	@${OC} policy add-role-to-group system:image-puller system:serviceaccounts:${OPERATOR_NAMESPACE} --namespace=${OPERATOR_IMAGE_NAMESPACE} &> /dev/null
-	@# we need to make sure the 'default' service account is created - we'll need it later for the pull secret
-	@for i in {1..5}; do ${OC} get sa default -n ${OPERATOR_IMAGE_NAMESPACE} &> /dev/null && break || echo -n "." && sleep 1; done; echo
 
 .prepare-minikube: .ensure-oc-exists .ensure-minikube-exists
 	@$(eval CLUSTER_REPO_INTERNAL ?= localhost:5000)
@@ -50,6 +48,8 @@
 	 fi
 
 .prepare-kind: .ensure-oc-exists .ensure-kind-exists
+	@$(eval CLUSTER_REPO_INTERNAL ?= localhost)
+	@$(eval CLUSTER_REPO ?= )
 	@$(eval CLUSTER_KIALI_TAG ?= ${CONTAINER_NAME}:${CONTAINER_VERSION})
 	@$(eval CLUSTER_OPERATOR_TAG ?= ${OPERATOR_CONTAINER_NAME}:${OPERATOR_CONTAINER_VERSION})
 ifeq ($(DORP),docker)

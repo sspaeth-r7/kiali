@@ -11,17 +11,17 @@ import (
 )
 
 type NoHostChecker struct {
-	Namespace         string
 	Namespaces        models.Namespaces
-	VirtualService    networking_v1beta1.VirtualService
+	VirtualService    *networking_v1beta1.VirtualService
 	ServiceEntryHosts map[string][]string
 	RegistryServices  []*kubernetes.RegistryService
+	PolicyAllowAny    bool
 }
 
 func (n NoHostChecker) Check() ([]*models.IstioCheck, bool) {
 	validations := make([]*models.IstioCheck, 0)
 	valid := true
-	namespace, clusterName := n.VirtualService.Namespace, n.VirtualService.ClusterName
+	namespace := n.VirtualService.Namespace
 
 	for k, httpRoute := range n.VirtualService.Spec.Http {
 		if httpRoute != nil {
@@ -31,10 +31,13 @@ func (n NoHostChecker) Check() ([]*models.IstioCheck, bool) {
 					if host == "" {
 						continue
 					}
-					fqdn := kubernetes.GetHost(host, namespace, clusterName, n.Namespaces.GetNames())
+					fqdn := kubernetes.GetHost(host, namespace, n.Namespaces.GetNames())
 					if !n.checkDestination(fqdn.String(), namespace) {
 						path := fmt.Sprintf("spec/http[%d]/route[%d]/destination/host", k, i)
 						validation := models.Build("virtualservices.nohost.hostnotfound", path)
+						if n.PolicyAllowAny {
+							validation.Severity = models.WarningSeverity
+						}
 						validations = append(validations, &validation)
 						valid = false
 					}
@@ -51,10 +54,13 @@ func (n NoHostChecker) Check() ([]*models.IstioCheck, bool) {
 					if host == "" {
 						continue
 					}
-					fqdn := kubernetes.GetHost(host, namespace, clusterName, n.Namespaces.GetNames())
+					fqdn := kubernetes.GetHost(host, namespace, n.Namespaces.GetNames())
 					if !n.checkDestination(fqdn.String(), namespace) {
 						path := fmt.Sprintf("spec/tcp[%d]/route[%d]/destination/host", k, i)
 						validation := models.Build("virtualservices.nohost.hostnotfound", path)
+						if n.PolicyAllowAny {
+							validation.Severity = models.WarningSeverity
+						}
 						validations = append(validations, &validation)
 						valid = false
 					}
@@ -71,10 +77,13 @@ func (n NoHostChecker) Check() ([]*models.IstioCheck, bool) {
 					if host == "" {
 						continue
 					}
-					fqdn := kubernetes.GetHost(host, namespace, clusterName, n.Namespaces.GetNames())
+					fqdn := kubernetes.GetHost(host, namespace, n.Namespaces.GetNames())
 					if !n.checkDestination(fqdn.String(), namespace) {
 						path := fmt.Sprintf("spec/tls[%d]/route[%d]/destination/host", k, i)
 						validation := models.Build("virtualservices.nohost.hostnotfound", path)
+						if n.PolicyAllowAny {
+							validation.Severity = models.WarningSeverity
+						}
 						validations = append(validations, &validation)
 						valid = false
 					}
@@ -83,11 +92,6 @@ func (n NoHostChecker) Check() ([]*models.IstioCheck, bool) {
 		}
 	}
 
-	if len(n.VirtualService.Spec.Http) == 0 && len(n.VirtualService.Spec.Tcp) == 0 && len(n.VirtualService.Spec.Tls) == 0 {
-		validation := models.Build("virtualservices.nohost.invalidprotocol", "")
-		validations = append(validations, &validation)
-		valid = false
-	}
 	return validations, valid
 }
 

@@ -66,6 +66,7 @@ both roles aren't mutually exclusive.
 Current list of testers (alphabetically ordered):
 
 * [FilipB](https://github.com/FilipB)
+* [matejnesuta](https://github.com/matejnesuta)
 * [mattmahoneyrh](https://github.com/mattmahoneyrh)
 * [pbajjuri20](https://github.com/pbajjuri20)
 * [prachiyadav](https://github.com/prachiyadav)
@@ -106,7 +107,6 @@ Thus, they are able to guide and mentor other Maintainers, give direction, and s
 Current list of leaders (alphabetically ordered):
 
 * [jshaughn](https://github.com/jshaughn)
-* [lucasponce](https://github.com/lucasponce)
 
 ### Becoming a Leader
 
@@ -154,6 +154,7 @@ Contact the Maintainers about changing to Emeritus status, or reducing your cont
 * [jotak](https://github.com/jotak)
 * [jpkrohling](https://github.com/jpkrohling)
 * [kevinearls](https://github.com/kevinearls)
+* [lucasponce](https://github.com/lucasponce)
 * [lwrigh](https://github.com/lwrigh)
 * [maltron](https://github.com/maltron)
 * [mtho11](https://github.com/mtho11)

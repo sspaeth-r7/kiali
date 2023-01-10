@@ -179,6 +179,25 @@ func NewRoutes() (r *Routes) {
 			handlers.Config,
 			true,
 		},
+		// swagger:route GET /crippled kiali getCrippledFeatures
+		// ---
+		// Endpoint to get the crippled features of Kiali
+		//
+		//     Produces:
+		//     - application/json
+		//
+		//     Schemes: http, https
+		//
+		// responses:
+		//      500: internalError
+		//      200: statusInfo
+		{
+			"Crippled",
+			"GET",
+			"/api/crippled",
+			handlers.CrippledFeatures,
+			true,
+		},
 		// swagger:route GET /istio/permissions config getPermissions
 		// ---
 		// Endpoint to get the caller permissions on new Istio Config objects
@@ -940,6 +959,27 @@ func NewRoutes() (r *Routes) {
 			handlers.NamespaceValidationSummary,
 			true,
 		},
+		// swagger:route GET /istio/validations namespaces namespacesValidations
+		// ---
+		// Get validation summary for all objects in the given namespaces
+		//
+		//     Produces:
+		//     - application/json
+		//
+		//     Schemes: http, https
+		//
+		// responses:
+		//      200: namespaceValidationSummaryResponse
+		//      400: badRequestError
+		//      500: internalError
+		//
+		{
+			"ConfigValidationSummary",
+			"GET",
+			"/api/istio/validations",
+			handlers.ConfigValidationSummary,
+			true,
+		},
 		// swagger:route GET /mesh/tls tls meshTls
 		// ---
 		// Get TLS status for the whole mesh
@@ -1360,6 +1400,60 @@ func NewRoutes() (r *Routes) {
 			"GET",
 			"/api/clusters",
 			handlers.GetClusters,
+			true,
+		},
+		// swagger:route GET /api/mesh/outbound_traffic_policy/mode
+		// ---
+		// Endpoint to get the OutboundTrafficPolicy Mode configured in the service mesh.
+		//              Produces:
+		//              - application/json
+		//
+		//              Schemes: http, https
+		//
+		// responses:
+		//              500: internalError
+		//              200: clustersResponse
+		{
+			"OutboundTrafficPolicyMode",
+			"GET",
+			"/api/mesh/outbound_traffic_policy/mode",
+			handlers.OutboundTrafficPolicyMode,
+			true,
+		},
+		// swagger:route GET /api/mesh/resources/thresholds
+		// ---
+		// Endpoint to get the IstiodResourceThresholds.
+		//              Produces:
+		//              - application/json
+		//
+		//              Schemes: http, https
+		//
+		// responses:
+		//              500: internalError
+		//              200: istiodResourceThreholds
+		{
+			"IstiodResourceThresholds",
+			"GET",
+			"/api/mesh/resources/thresholds",
+			handlers.IstiodResourceThresholds,
+			true,
+		},
+		// swagger:route GET /api/mesh/canaries/status
+		// ---
+		// Endpoint to get the IstiodCanariesStatus.
+		//              Produces:
+		//              - application/json
+		//
+		//              Schemes: http, https
+		//
+		// responses:
+		//              500: internalError
+		//              200: istiodCanariesStatus
+		{
+			"IstiodCanariesStatus",
+			"GET",
+			"/api/mesh/canaries/status",
+			handlers.IstiodCanariesStatus,
 			true,
 		},
 	}

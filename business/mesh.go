@@ -18,10 +18,14 @@ import (
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/kubernetes"
 	"github.com/kiali/kiali/log"
+	"github.com/kiali/kiali/models"
 	"github.com/kiali/kiali/util/httputil"
 )
 
-const DefaultClusterID = "Kubernetes"
+const (
+	DefaultClusterID = "Kubernetes"
+	AllowAny         = "ALLOW_ANY"
+)
 
 // MeshService is a support service for retrieving data about the mesh environment
 // when Istio is installed with multi-cluster enabled. Prefer initializing this
@@ -88,6 +92,12 @@ type meshIdConfig struct {
 	DefaultConfig struct {
 		MeshId string `yaml:"meshId,omitempty"`
 	} `yaml:"defaultConfig,omitempty"`
+}
+
+type meshTrafficPolicyConfig struct {
+	OutboundTrafficPolicy struct {
+		Mode string `yaml:"mode,omitempty"`
+	} `yaml:"outboundTrafficPolicy,omitempty"`
 }
 
 // NewMeshService initializes a new MeshService structure with the given k8s client and
@@ -571,4 +581,111 @@ func (in *MeshService) resolveNetwork(clusterName string, kubeconfig *kubernetes
 	}
 
 	return networkName
+}
+
+func (in *MeshService) OutboundTrafficPolicy() (*models.OutboundPolicy, error) {
+	cfg := config.Get()
+	otp := models.OutboundPolicy{Mode: "ALLOW_ANY"}
+	var istioConfig *core_v1.ConfigMap
+	var err error
+	if IsNamespaceCached(cfg.IstioNamespace) {
+		istioConfig, err = kialiCache.GetConfigMap(cfg.IstioNamespace, cfg.ExternalServices.Istio.ConfigMapName)
+	} else {
+		istioConfig, err = in.k8s.GetConfigMap(cfg.IstioNamespace, cfg.ExternalServices.Istio.ConfigMapName)
+	}
+	if err != nil {
+		if errors.IsNotFound(err) {
+			err = fmt.Errorf("%w in namespace \"%s\"", err, cfg.IstioNamespace)
+		}
+		return nil, err
+	}
+
+	meshConfigYaml, ok := istioConfig.Data["mesh"]
+	if !ok {
+		log.Warning("Istio config not found when resolving if mesh-id is set. Falling back to mesh-id not configured.")
+		return &otp, nil
+	}
+
+	meshConfig := meshTrafficPolicyConfig{}
+	err = yaml.Unmarshal([]byte(meshConfigYaml), &meshConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(meshConfig.OutboundTrafficPolicy.Mode) > 0 {
+		otp.Mode = meshConfig.OutboundTrafficPolicy.Mode
+	}
+
+	return &otp, nil
+}
+
+func (in *MeshService) IstiodResourceThresholds() (*models.IstiodThresholds, error) {
+	conf := config.Get()
+
+	var istioDeployment *v1.Deployment
+	var istioDeploymentConfig = conf.ExternalServices.Istio.IstiodDeploymentName
+	var err error
+
+	if IsNamespaceCached(conf.IstioNamespace) {
+		istioDeployment, err = kialiCache.GetDeployment(conf.IstioNamespace, istioDeploymentConfig)
+	} else {
+		istioDeployment, err = in.k8s.GetDeployment(conf.IstioNamespace, istioDeploymentConfig)
+	}
+	if err != nil && !errors.IsNotFound(err) {
+		return nil, err
+	}
+
+	memoryLimit := istioDeployment.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().AsApproximateFloat64() / 1000000 // in Mb
+	cpuLimit := istioDeployment.Spec.Template.Spec.Containers[0].Resources.Limits.Cpu().AsApproximateFloat64()
+
+	thresholds := models.IstiodThresholds{Memory: memoryLimit, CPU: cpuLimit}
+
+	return &thresholds, nil
+}
+
+func (in *MeshService) CanaryUpgradeStatus() (*models.CanaryUpgradeStatus, error) {
+	conf := config.Get()
+	upgrade := conf.ExternalServices.Istio.IstioCanaryRevision.Upgrade
+	current := conf.ExternalServices.Istio.IstioCanaryRevision.Current
+	migratedNsList := []string{}
+	pendingNsList := []string{}
+
+	// If there is no canary configured, return empty lists
+	if upgrade == "" {
+		return &models.CanaryUpgradeStatus{MigratedNamespaces: migratedNsList, PendingNamespaces: pendingNsList}, nil
+	}
+
+	// Get migrated and pending namespaces
+	migratedNss, err := in.k8s.GetNamespaces(fmt.Sprintf("istio.io/rev=%s", upgrade))
+	if err != nil {
+		return nil, err
+	}
+	for _, ns := range migratedNss {
+		migratedNsList = append(migratedNsList, ns.Name)
+	}
+
+	pendingNss, err := in.k8s.GetNamespaces("istio-injection=enabled")
+	if err != nil {
+		return nil, err
+	}
+	for _, ns := range pendingNss {
+		pendingNsList = append(pendingNsList, ns.Name)
+	}
+
+	pendingNss, err = in.k8s.GetNamespaces(fmt.Sprintf("istio.io/rev=%s", current))
+	if err != nil {
+		return nil, err
+	}
+	for _, ns := range pendingNss {
+		pendingNsList = append(pendingNsList, ns.Name)
+	}
+
+	status := &models.CanaryUpgradeStatus{
+		CurrentVersion:     current,
+		UpgradeVersion:     upgrade,
+		MigratedNamespaces: migratedNsList,
+		PendingNamespaces:  pendingNsList,
+	}
+
+	return status, nil
 }

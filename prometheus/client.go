@@ -236,7 +236,6 @@ func (in *Client) FetchRange(metricName, labels, grouping, aggregator string, q 
 	if grouping != "" {
 		query += fmt.Sprintf(" by (%s)", grouping)
 	}
-	query = roundSignificant(query, 0.001)
 	return fetchRange(in.ctx, in.api, query, q.Range)
 }
 
@@ -296,7 +295,7 @@ func (in *Client) GetMetricsForLabels(metricNames []string, labelQueryString str
 	startT := time.Now()
 	queryString := fmt.Sprintf("count(%v) by (__name__)", labelQueryString)
 	results, warnings, err := in.api.Query(in.ctx, queryString, time.Now())
-	if warnings != nil && len(warnings) > 0 {
+	if len(warnings) > 0 {
 		log.Warningf("GetMetricsForLabels. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
 	}
 	if err != nil {
@@ -317,6 +316,39 @@ func (in *Client) GetMetricsForLabels(metricNames []string, labelQueryString str
 	}
 
 	log.Tracef("[Prom] GetMetricsForLabels: exec time=[%v], results count=[%v], looking for count=[%v], found count=[%v]", time.Since(startT), len(results.(model.Vector)), len(metricsWeAreLookingFor), len(metricsWeFound))
+	return metricsWeFound, nil
+}
+
+// GetExistingMetricNames returns a list of the requested metric names that exist in Prometheus (meaning there is a matching __name__ label).
+func (in *Client) GetExistingMetricNames(metricNames []string) ([]string, error) {
+	if len(metricNames) == 0 {
+		return []string{}, nil
+	}
+
+	log.Tracef("[Prom] GetExistingMetricNames: metricNames=[%v]", metricNames)
+	startT := time.Now()
+	results, warnings, err := in.api.LabelValues(in.ctx, "__name__", []string{}, time.Unix(0, 0), time.Now())
+	if len(warnings) > 0 {
+		log.Warningf("GetExistingMetricNames. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
+	}
+	if err != nil {
+		return nil, errors.NewServiceUnavailable(err.Error())
+	}
+
+	metricsWeAreLookingFor := make(map[string]bool, len(metricNames))
+	for i := 0; i < len(metricNames); i++ {
+		metricsWeAreLookingFor[string(metricNames[i])] = true
+	}
+
+	metricsWeFound := make([]string, 0, len(metricNames))
+	for _, item := range results {
+		name := string(item)
+		if metricsWeAreLookingFor[name] {
+			metricsWeFound = append(metricsWeFound, name)
+		}
+	}
+
+	log.Tracef("[Prom] GetExistingMetricNames: exec time=[%v], results count=[%v], looking for count=[%v], found count=[%v]", time.Since(startT), len(results), len(metricsWeAreLookingFor), len(metricsWeFound))
 	return metricsWeFound, nil
 }
 

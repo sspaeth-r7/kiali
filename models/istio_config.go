@@ -1,15 +1,16 @@
 package models
 
 import (
+	extentions_v1alpha1 "istio.io/client-go/pkg/apis/extensions/v1alpha1"
 	networking_v1alpha3 "istio.io/client-go/pkg/apis/networking/v1alpha3"
 	networking_v1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 	security_v1beta "istio.io/client-go/pkg/apis/security/v1beta1"
+	"istio.io/client-go/pkg/apis/telemetry/v1alpha1"
+	k8s_networking_v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
 // IstioConfigList istioConfigList
-//
 // This type is used for returning a response of IstioConfigList
-//
 // swagger:model IstioConfigList
 type IstioConfigList struct {
 	// The namespace of istioConfiglist
@@ -17,19 +18,24 @@ type IstioConfigList struct {
 	// required: true
 	Namespace Namespace `json:"namespace"`
 
-	DestinationRules []networking_v1beta1.DestinationRule `json:"destinationRules"`
-	EnvoyFilters     []networking_v1alpha3.EnvoyFilter    `json:"envoyFilters"`
-	Gateways         []networking_v1beta1.Gateway         `json:"gateways"`
-	ServiceEntries   []networking_v1beta1.ServiceEntry    `json:"serviceEntries"`
-	Sidecars         []networking_v1beta1.Sidecar         `json:"sidecars"`
-	VirtualServices  []networking_v1beta1.VirtualService  `json:"virtualServices"`
-	WorkloadEntries  []networking_v1beta1.WorkloadEntry   `json:"workloadEntries"`
-	WorkloadGroups   []networking_v1beta1.WorkloadGroup   `json:"workloadGroups"`
+	DestinationRules []*networking_v1beta1.DestinationRule `json:"destinationRules"`
+	EnvoyFilters     []*networking_v1alpha3.EnvoyFilter    `json:"envoyFilters"`
+	Gateways         []*networking_v1beta1.Gateway         `json:"gateways"`
+	ServiceEntries   []*networking_v1beta1.ServiceEntry    `json:"serviceEntries"`
+	Sidecars         []*networking_v1beta1.Sidecar         `json:"sidecars"`
+	VirtualServices  []*networking_v1beta1.VirtualService  `json:"virtualServices"`
+	WorkloadEntries  []*networking_v1beta1.WorkloadEntry   `json:"workloadEntries"`
+	WorkloadGroups   []*networking_v1beta1.WorkloadGroup   `json:"workloadGroups"`
+	WasmPlugins      []*extentions_v1alpha1.WasmPlugin     `json:"wasmPlugins"`
+	Telemetries      []*v1alpha1.Telemetry                 `json:"telemetries"`
 
-	AuthorizationPolicies  []security_v1beta.AuthorizationPolicy   `json:"authorizationPolicies"`
-	PeerAuthentications    []security_v1beta.PeerAuthentication    `json:"peerAuthentications"`
-	RequestAuthentications []security_v1beta.RequestAuthentication `json:"requestAuthentications"`
-	IstioValidations       IstioValidations                        `json:"validations"`
+	K8sGateways   []*k8s_networking_v1alpha2.Gateway   `json:"k8sGateways"`
+	K8sHTTPRoutes []*k8s_networking_v1alpha2.HTTPRoute `json:"k8sHTTPRoutes"`
+
+	AuthorizationPolicies  []*security_v1beta.AuthorizationPolicy   `json:"authorizationPolicies"`
+	PeerAuthentications    []*security_v1beta.PeerAuthentication    `json:"peerAuthentications"`
+	RequestAuthentications []*security_v1beta.RequestAuthentication `json:"requestAuthentications"`
+	IstioValidations       IstioValidations                         `json:"validations"`
 }
 
 type IstioConfigDetails struct {
@@ -47,6 +53,11 @@ type IstioConfigDetails struct {
 	VirtualService        *networking_v1beta1.VirtualService     `json:"virtualService"`
 	WorkloadEntry         *networking_v1beta1.WorkloadEntry      `json:"workloadEntry"`
 	WorkloadGroup         *networking_v1beta1.WorkloadGroup      `json:"workloadGroup"`
+	WasmPlugin            *extentions_v1alpha1.WasmPlugin        `json:"wasmPlugin"`
+	Telemetry             *v1alpha1.Telemetry                    `json:"telemetry"`
+
+	K8sGateway   *k8s_networking_v1alpha2.Gateway   `json:"k8sGateway"`
+	K8sHTTPRoute *k8s_networking_v1alpha2.HTTPRoute `json:"k8sHTTPRoute"`
 
 	Permissions           ResourcePermissions `json:"permissions"`
 	IstioValidation       *IstioValidation    `json:"validation"`
@@ -142,6 +153,24 @@ var IstioConfigHelpMessages = map[string][]IstioConfigHelp{
 		{ObjectField: "spec.template", Message: "Template to be used for the generation of WorkloadEntry resources that belong to this WorkloadGroup."},
 		{ObjectField: "spec.probe", Message: "ReadinessProbe describes the configuration the user must provide for healthchecking on their workload."},
 	},
+	"wasmplugins": { //TODO
+		{},
+	},
+	"telemetries": { //TODO
+		{},
+	},
+	"k8sgateways": {
+		{ObjectField: "", Message: "Kubernetes Gateway API Configuration Object. A Gateway describes how traffic can be translated to Services within the cluster."},
+		{ObjectField: "spec.GatewayClassName", Message: "Defines the name of a GatewayClass object used by this Gateway."},
+		{ObjectField: "spec.listeners", Message: "Define the hostnames, ports, protocol, termination, TLS settings and which routes can be attached to a listener."},
+		{ObjectField: "spec.addresses", Message: "Define the network addresses requested for this gateway."},
+	},
+	"k8shttproutes": { //TODO
+		{ObjectField: "", Message: "Kubernetes Gateway API Configuration Object. HTTPRoute is for multiplexing HTTP or terminated HTTPS connections."},
+	},
+	"internal": {
+		{ObjectField: "", Message: "Internal resources are not editable"},
+	},
 }
 
 // ResourcePermissions holds permission flags for an object type
@@ -157,3 +186,129 @@ type ResourcesPermissions map[string]*ResourcePermissions
 
 // IstioConfigPermissions holds a map of ResourcesPermissions per namespace
 type IstioConfigPermissions map[string]*ResourcesPermissions
+
+// IstioConfigs holds a map of IstioConfigList per namespace
+type IstioConfigs map[string]*IstioConfigList
+
+// FilterIstioConfigs Filters all Istio configs from Istio registry by given namespaces and return a map config list per namespace
+func (configList IstioConfigList) FilterIstioConfigs(nss []string) *IstioConfigs {
+	filtered := IstioConfigs{}
+
+	for _, ns := range nss {
+		if filtered[ns] == nil {
+			filtered[ns] = new(IstioConfigList)
+			filtered[ns].IstioValidations = IstioValidations{}
+			filtered[ns].Namespace = Namespace{Name: ns}
+			filtered[ns].DestinationRules = []*networking_v1beta1.DestinationRule{}
+			filtered[ns].EnvoyFilters = []*networking_v1alpha3.EnvoyFilter{}
+			filtered[ns].Gateways = []*networking_v1beta1.Gateway{}
+			filtered[ns].K8sGateways = []*k8s_networking_v1alpha2.Gateway{}
+			filtered[ns].K8sHTTPRoutes = []*k8s_networking_v1alpha2.HTTPRoute{}
+			filtered[ns].VirtualServices = []*networking_v1beta1.VirtualService{}
+			filtered[ns].ServiceEntries = []*networking_v1beta1.ServiceEntry{}
+			filtered[ns].Sidecars = []*networking_v1beta1.Sidecar{}
+			filtered[ns].WorkloadEntries = []*networking_v1beta1.WorkloadEntry{}
+			filtered[ns].WorkloadGroups = []*networking_v1beta1.WorkloadGroup{}
+			filtered[ns].AuthorizationPolicies = []*security_v1beta.AuthorizationPolicy{}
+			filtered[ns].PeerAuthentications = []*security_v1beta.PeerAuthentication{}
+			filtered[ns].RequestAuthentications = []*security_v1beta.RequestAuthentication{}
+			filtered[ns].WasmPlugins = []*extentions_v1alpha1.WasmPlugin{}
+			filtered[ns].Telemetries = []*v1alpha1.Telemetry{}
+		}
+		for _, dr := range configList.DestinationRules {
+			if dr.Namespace == ns {
+				filtered[ns].DestinationRules = append(filtered[ns].DestinationRules, dr)
+			}
+		}
+
+		for _, ef := range configList.EnvoyFilters {
+			if ef.Namespace == ns {
+				filtered[ns].EnvoyFilters = append(filtered[ns].EnvoyFilters, ef)
+			}
+		}
+
+		for _, gw := range configList.Gateways {
+			if gw.Namespace == ns {
+				filtered[ns].Gateways = append(filtered[ns].Gateways, gw)
+			}
+		}
+
+		for _, gw := range configList.K8sGateways {
+			if gw.Namespace == ns {
+				filtered[ns].K8sGateways = append(filtered[ns].K8sGateways, gw)
+			}
+		}
+
+		for _, route := range configList.K8sHTTPRoutes {
+			if route.Namespace == ns {
+				filtered[ns].K8sHTTPRoutes = append(filtered[ns].K8sHTTPRoutes, route)
+			}
+		}
+
+		for _, se := range configList.ServiceEntries {
+			if se.Namespace == ns {
+				filtered[ns].ServiceEntries = append(filtered[ns].ServiceEntries, se)
+			}
+		}
+
+		for _, sc := range configList.Sidecars {
+			if sc.Namespace == ns {
+				filtered[ns].Sidecars = append(filtered[ns].Sidecars, sc)
+			}
+		}
+
+		for _, vs := range configList.VirtualServices {
+			if vs.Namespace == ns {
+				filtered[ns].VirtualServices = append(filtered[ns].VirtualServices, vs)
+			}
+		}
+
+		for _, we := range configList.WorkloadEntries {
+			if we.Namespace == ns {
+				filtered[ns].WorkloadEntries = append(filtered[ns].WorkloadEntries, we)
+			}
+		}
+
+		for _, wg := range configList.WorkloadGroups {
+			if wg.Namespace == ns {
+				filtered[ns].WorkloadGroups = append(filtered[ns].WorkloadGroups, wg)
+			}
+		}
+
+		for _, wp := range configList.WasmPlugins {
+			if wp.Namespace == ns {
+				filtered[ns].WasmPlugins = append(filtered[ns].WasmPlugins, wp)
+			}
+		}
+
+		for _, tm := range configList.Telemetries {
+			if tm.Namespace == ns {
+				filtered[ns].Telemetries = append(filtered[ns].Telemetries, tm)
+			}
+		}
+
+		for _, ap := range configList.AuthorizationPolicies {
+			if ap.Namespace == ns {
+				filtered[ns].AuthorizationPolicies = append(filtered[ns].AuthorizationPolicies, ap)
+			}
+		}
+
+		for _, pa := range configList.PeerAuthentications {
+			if pa.Namespace == ns {
+				filtered[ns].PeerAuthentications = append(filtered[ns].PeerAuthentications, pa)
+			}
+		}
+
+		for _, ra := range configList.RequestAuthentications {
+			if ra.Namespace == ns {
+				filtered[ns].RequestAuthentications = append(filtered[ns].RequestAuthentications, ra)
+			}
+		}
+		for k, v := range configList.IstioValidations {
+			if k.Namespace == ns {
+				filtered[ns].IstioValidations.MergeValidations(IstioValidations{k: v})
+			}
+		}
+	}
+	return &filtered
+}

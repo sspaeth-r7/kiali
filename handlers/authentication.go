@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -48,7 +47,6 @@ func (aHandler AuthenticationHandler) Handle(next http.Handler) http.Handler {
 		conf := config.Get()
 
 		var authInfo *api.AuthInfo
-		var token string
 
 		switch conf.Auth.Strategy {
 		case config.AuthStrategyToken, config.AuthStrategyOpenId, config.AuthStrategyOpenshift, config.AuthStrategyHeader:
@@ -63,7 +61,10 @@ func (aHandler AuthenticationHandler) Handle(next http.Handler) http.Handler {
 			}
 		case config.AuthStrategyAnonymous:
 			log.Tracef("Access to the server endpoint is not secured with credentials - letting request come in. Url: [%s]", r.URL.String())
-			token = aHandler.saToken
+			token, err := kubernetes.GetKialiToken()
+			if err != nil {
+				token = ""
+			}
 			authInfo = &api.AuthInfo{Token: token}
 		}
 
@@ -73,7 +74,7 @@ func (aHandler AuthenticationHandler) Handle(next http.Handler) http.Handler {
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				log.Errorf("No authInfo: %v", http.StatusBadRequest)
 			}
-			ctx := context.WithValue(r.Context(), "authInfo", authInfo)
+			ctx := authentication.SetAuthInfoContext(r.Context(), authInfo)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		case http.StatusUnauthorized:
 			err := authentication.GetAuthController().TerminateSession(r, w)
@@ -90,7 +91,7 @@ func (aHandler AuthenticationHandler) Handle(next http.Handler) http.Handler {
 
 func (aHandler AuthenticationHandler) HandleUnauthenticated(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), "authInfo", &api.AuthInfo{Token: ""})
+		ctx := authentication.SetAuthInfoContext(r.Context(), &api.AuthInfo{Token: ""})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

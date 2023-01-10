@@ -17,14 +17,14 @@ import (
 const AuthorizationPolicyCheckerType = "authorizationpolicy"
 
 type AuthorizationPolicyChecker struct {
-	AuthorizationPolicies []security_v1beta.AuthorizationPolicy
-	Namespace             string
+	AuthorizationPolicies []*security_v1beta.AuthorizationPolicy
 	Namespaces            models.Namespaces
-	ServiceEntries        []networking_v1beta1.ServiceEntry
+	ServiceEntries        []*networking_v1beta1.ServiceEntry
 	WorkloadsPerNamespace map[string]models.WorkloadList
 	MtlsDetails           kubernetes.MTLSDetails
-	VirtualServices       []networking_v1beta1.VirtualService
+	VirtualServices       []*networking_v1beta1.VirtualService
 	RegistryServices      []*kubernetes.RegistryService
+	PolicyAllowAny        bool
 }
 
 func (a AuthorizationPolicyChecker) Check() models.IstioValidations {
@@ -37,7 +37,6 @@ func (a AuthorizationPolicyChecker) Check() models.IstioValidations {
 
 	// Group Validations
 	validations.MergeValidations(authorization.MtlsEnabledChecker{
-		Namespace:             a.Namespace,
 		AuthorizationPolicies: a.AuthorizationPolicies,
 		MtlsDetails:           a.MtlsDetails,
 		RegistryServices:      a.RegistryServices,
@@ -47,7 +46,7 @@ func (a AuthorizationPolicyChecker) Check() models.IstioValidations {
 }
 
 // runChecks runs all the individual checks for a single mesh policy and appends the result into validations.
-func (a AuthorizationPolicyChecker) runChecks(authPolicy security_v1beta.AuthorizationPolicy) models.IstioValidations {
+func (a AuthorizationPolicyChecker) runChecks(authPolicy *security_v1beta.AuthorizationPolicy) models.IstioValidations {
 	policyName := authPolicy.Name
 	key, rrValidation := EmptyValidValidation(policyName, authPolicy.Namespace, AuthorizationPolicyCheckerType)
 	serviceHosts := kubernetes.ServiceEntryHostnames(a.ServiceEntries)
@@ -56,10 +55,10 @@ func (a AuthorizationPolicyChecker) runChecks(authPolicy security_v1beta.Authori
 		matchLabels = authPolicy.Spec.Selector.MatchLabels
 	}
 	enabledCheckers := []Checker{
-		common.SelectorNoWorkloadFoundChecker(AuthorizationPolicyCheckerType, matchLabels, a.WorkloadsPerNamespace[a.Namespace]),
+		common.SelectorNoWorkloadFoundChecker(AuthorizationPolicyCheckerType, matchLabels, a.WorkloadsPerNamespace),
 		authorization.NamespaceMethodChecker{AuthorizationPolicy: authPolicy, Namespaces: a.Namespaces.GetNames()},
-		authorization.NoHostChecker{AuthorizationPolicy: authPolicy, Namespace: a.Namespace, Namespaces: a.Namespaces,
-			ServiceEntries: serviceHosts, VirtualServices: a.VirtualServices, RegistryServices: a.RegistryServices},
+		authorization.NoHostChecker{AuthorizationPolicy: authPolicy, Namespaces: a.Namespaces,
+			ServiceEntries: serviceHosts, VirtualServices: a.VirtualServices, RegistryServices: a.RegistryServices, PolicyAllowAny: a.PolicyAllowAny},
 		authorization.PrincipalsChecker{AuthorizationPolicy: authPolicy, ServiceAccounts: a.ServiceAccountNames(strings.Replace(config.Get().ExternalServices.Istio.IstioIdentityDomain, "svc.", "", 1))},
 	}
 

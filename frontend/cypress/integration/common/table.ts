@@ -1,4 +1,4 @@
-import { And, Then, When } from 'cypress-cucumber-preprocessor/steps';
+import { And, Then, When } from '@badeball/cypress-cucumber-preprocessor';
 import { TableDefinition } from 'cypress-cucumber-preprocessor';
 
 Then(`user sees a table with headings`, (tableHeadings: TableDefinition) => {
@@ -30,6 +30,10 @@ And('the {string} column on the {string} row is empty', (column: string, rowText
   getColWithRowText(rowText, column).children().should('be.empty');
 });
 
+And('user clicks in {string} column on the {string} text', (column: string, rowText: string) => {
+  getColWithRowText(rowText, column).find('a').click();
+});
+
 Then('user sees {string} in the table', (service: string) => {
   cy.get('tbody').within(() => {
     if (service === 'nothing') {
@@ -45,6 +49,12 @@ Then('user sees {string} in the table', (service: string) => {
 And('table length should be {int}', (numRows: number) => {
   cy.get('tbody').within(() => {
     cy.get('tr').should('have.length', numRows);
+  });
+});
+
+And('table length should exceed {int}', (numRows: number) => {
+  cy.get('tbody').within(() => {
+    cy.get('tr').should('have.length.greaterThan', numRows);
   });
 });
 
@@ -86,6 +96,22 @@ export function getColWithRowText(rowSearchText: string, colName: string) {
       .find('td')
       .then($cols => $cols[colNum]);
   });
+}
+
+// getCellsForCol returns every cell matching the table header name or
+// the table header index. Example:
+//
+// | Name | Type | Health |
+// | app1 | wkld | Good   |
+// | app2 | svc  | Good   |
+//
+// getCellsForCol('Name') or getCellsForCol(0) would both return
+// the cells 'app1' and 'app2'.
+export function getCellsForCol(column: string | Number) {
+  if (typeof column === 'number') {
+    return cy.get(`td[data-key="${column}"]`);
+  }
+  return cy.get(`td[data-label="${column}"]`);
 }
 
 Then('user sees the {string} table with {int} rows', (tableName: string, numRows: number) => {
@@ -135,4 +161,18 @@ export function ensureObjectsInTable(...names: string[]) {
       cy.get('tr').contains(name);
     });
   });
+}
+
+export function checkHealthIndicatorInTable(targetNamespace: string, targetType: string | null, targetRowItemName: string, healthStatus: string) {
+  const selector = targetType ? `${targetNamespace}_${targetType}_${targetRowItemName}` : `${targetNamespace}_${targetRowItemName}`;
+  cy.get(`[data-test=VirtualItem_Ns${selector}] svg[class=icon-${healthStatus}]`)
+      .should('exist');
+}
+
+export function checkHealthStatusInTable(targetNamespace: string, targetType: string | null, targetRowItemName: string, healthStatus: string) {
+  const selector = targetType ? `${targetNamespace}_${targetType}_${targetRowItemName}` : `${targetNamespace}_${targetRowItemName}`;
+  cy.get(`[data-test=VirtualItem_Ns${selector}] td:first-child span`)
+      .trigger('mouseenter');
+  cy.get(`[aria-label='Health indicator'] strong`)
+      .should('contain.text', healthStatus);
 }

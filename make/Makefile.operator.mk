@@ -14,8 +14,8 @@
 
 .prepare-operator-pull-secret: .prepare-cluster
 ifeq ($(CLUSTER_TYPE),openshift)
-	@# base64 encode a pull secret (using the 'default' sa secret) that can be used to pull the operator image from the OpenShift internal registry
-	@$(eval OPERATOR_IMAGE_PULL_SECRET_JSON = $(shell ${OC} registry login --registry="$(shell ${OC} registry info --internal)" --namespace=${OPERATOR_IMAGE_NAMESPACE} -z default --to=- | base64 -w0))
+	@# base64 encode a pull secret (using the logged in user token) that can be used to pull the operator image from the OpenShift internal registry
+	@$(eval OPERATOR_IMAGE_PULL_SECRET_JSON = $(shell ${OC} registry login --registry="$(shell ${OC} registry info --internal)" --namespace=${OPERATOR_IMAGE_NAMESPACE} --to=- | base64 -w0))
 	@$(eval OPERATOR_IMAGE_PULL_SECRET_NAME ?= kiali-operator-pull-secret)
 else
 	@$(eval OPERATOR_IMAGE_PULL_SECRET_JSON = )
@@ -30,6 +30,9 @@ endif
 		${OC} label secret ${OPERATOR_IMAGE_PULL_SECRET_NAME} --namespace ${OPERATOR_NAMESPACE} app.kubernetes.io/name=kiali-operator; \
 		rm /tmp/kiali-operator-pull-secret.json; \
 	fi
+
+.remove-operator-pull-secret: .prepare-operator-pull-secret
+	@if [ -n "${OPERATOR_IMAGE_PULL_SECRET_NAME}" ]; then ${OC} delete --ignore-not-found=true secret ${OPERATOR_IMAGE_PULL_SECRET_NAME} --namespace=${OPERATOR_NAMESPACE} ; fi
 
 ## operator-create: Deploy the Kiali operator to the cluster using the install script.
 # By default, this target will not deploy Kiali - it will only deploy the operator.
@@ -63,7 +66,7 @@ operator-create: .ensure-operator-repo-exists .ensure-operator-helm-chart-exists
     --version                       "${KIALI_CR_SPEC_VERSION}"
 
 ## operator-delete: Remove the Kiali operator resources from the cluster along with Kiali itself
-operator-delete: .ensure-oc-exists kiali-delete kiali-purge
+operator-delete: .ensure-oc-exists kiali-delete kiali-purge .remove-operator-pull-secret
 	@echo Remove Operator
 	${OC} delete --ignore-not-found=true all,sa,deployments,secrets --selector="app.kubernetes.io/name=kiali-operator" -n "${OPERATOR_NAMESPACE}"
 	${OC} delete --ignore-not-found=true clusterroles,clusterrolebindings --selector="app.kubernetes.io/name=kiali-operator"
@@ -131,7 +134,7 @@ endif
 	@echo "Ensure the CRDs exist"; ${OC} apply -f ${HELM_CHARTS_REPO}/kiali-operator/crds/crds.yaml
 	@echo "Create a dummy Kiali CR"; ${OC} apply -f ${ROOTDIR}/operator/dev-playbook-config/dev-kiali-cr.yaml
 	ansible-galaxy collection install operator_sdk.util community.kubernetes
-	ALLOW_AD_HOC_KIALI_NAMESPACE=true ALLOW_AD_HOC_KIALI_IMAGE=true ANSIBLE_ROLES_PATH=${ROOTDIR}/operator/roles ${ANSIBLE_CALLBACK_WHITELIST_ARG} ansible-playbook -vvv ${ANSIBLE_PYTHON_INTERPRETER} -i ${ROOTDIR}/operator/dev-playbook-config/dev-hosts.yaml ${ROOTDIR}/operator/dev-playbook-config/dev-playbook.yaml
+	ALLOW_AD_HOC_KIALI_NAMESPACE=true ALLOW_AD_HOC_KIALI_IMAGE=true ALLOW_ALL_ACCESSIBLE_NAMESPACES=true ANSIBLE_ROLES_PATH=${ROOTDIR}/operator/roles ${ANSIBLE_CALLBACK_WHITELIST_ARG} ansible-playbook -vvv ${ANSIBLE_PYTHON_INTERPRETER} -i ${ROOTDIR}/operator/dev-playbook-config/dev-hosts.yaml ${ROOTDIR}/operator/dev-playbook-config/dev-playbook.yaml
 	@echo "Remove the dummy Kiali CR"; ${OC} delete -f ${ROOTDIR}/operator/dev-playbook-config/dev-kiali-cr.yaml
 
 # Set an operator environment variable to configure features inside the operator.
@@ -184,3 +187,78 @@ operator-set-config-ansible-profiler-off: .operator-set-env-ansible-profiler-off
 .operator-set-env-ansible-profiler-off:
 	@$(eval OPERATOR_ENV_NAME = ANSIBLE_CONFIG)
 	@$(eval OPERATOR_ENV_VALUE ?= /etc/ansible/ansible.cfg)
+
+#
+# The following targets will allow you to run the operator external to the cluster in the same manner it runs in the cluster
+#
+
+.download-ansible-operator-if-needed:
+	@if [ "$(shell which ansible-operator 2>/dev/null || echo -n "")" == "" ]; then \
+	  sdk_version="$$(sed -rn 's/^OPERATOR_SDK_VERSION *\?= *(.*)/\1/p' ${OPERATOR_DIR}/Makefile)" ;\
+	  mkdir -p "${OUTDIR}/ansible-operator-install" ;\
+	  if [ -x "${OUTDIR}/ansible-operator-install/ansible-operator" ]; then \
+	    echo "You do not have ansible-operator installed in your PATH. Will use the one found here: ${OUTDIR}/ansible-operator-install/ansible-operator" ;\
+	  else \
+	    echo "You do not have ansible-operator installed in your PATH. The binary will be downloaded to ${OUTDIR}/ansible-operator-install/ansible-operator" ;\
+	    curl -L https://github.com/operator-framework/operator-sdk/releases/download/v$${sdk_version}/ansible-operator_${OS}_${ARCH} > "${OUTDIR}/ansible-operator-install/ansible-operator" ;\
+	    chmod +x "${OUTDIR}/ansible-operator-install/ansible-operator" ;\
+	  fi ;\
+	fi
+
+.ensure-ansible-operator-exists: .download-ansible-operator-if-needed
+	@$(eval ANSIBLE_OPERATOR_BIN ?= $(shell which ansible-operator 2>/dev/null || echo "${OUTDIR}/ansible-operator-install/ansible-operator"))
+	@"${ANSIBLE_OPERATOR_BIN}" version
+
+.download-ansible-runner-if-needed:
+	@if [ "$(shell which ansible-runner 2>/dev/null || echo -n "")" == "" ]; then \
+	  mkdir -p "${OUTDIR}/ansible-operator-install" ;\
+	  if [ -x "${OUTDIR}/ansible-operator-install/ansible-runner" ]; then \
+	    echo "You do not have ansible-runner installed in your PATH.  Will use the one found here: ${OUTDIR}/ansible-operator-install/ansible-runner" ;\
+	  else \
+	    echo "You do not have ansible-runner installed in your PATH. An attempt to install it will be made and a softlink to its binary placed at ${OUTDIR}/ansible-operator-install/ansible-runner" ;\
+	    echo "If the installation fails, you must install it manually. See: https://ansible-runner.readthedocs.io/en/latest/install/" ;\
+	    python3 -m pip install ansible-runner ansible-runner-http openshift ;\
+	    ln --force -s "${HOME}/.local/bin/ansible-runner" "${OUTDIR}/ansible-operator-install/ansible-runner" ;\
+	  fi ;\
+	fi
+
+.ensure-ansible-runner-exists: .download-ansible-runner-if-needed
+	@$(eval ANSIBLE_RUNNER_BIN ?= $(shell which ansible-runner 2>/dev/null || echo "${OUTDIR}/ansible-operator-install/ansible-runner"))
+	@"${ANSIBLE_RUNNER_BIN}" --version
+
+## get-ansible-operator: Downloads the Ansible Operator binary if it is not already in PATH.
+get-ansible-operator: .ensure-ansible-operator-exists .ensure-ansible-runner-exists
+	@echo "Ansible Operator location: ${ANSIBLE_OPERATOR_BIN} (ansible-runner: ${ANSIBLE_RUNNER_BIN})"
+
+## crd-create: Installs the Kiali CRD. Useful if running the operator outside of OLM or Helm.
+crd-create: .ensure-oc-login
+	${OC} apply -f "${OPERATOR_DIR}/manifests/kiali-ossm/manifests/kiali.crd.yaml"
+
+## crd-delete: Uninstalls the Kiali CRD and all CRs. Useful if running the operator outside of OLM or Helm.
+crd-delete:
+	${OC} delete --ignore-not-found=true crd kialis.kiali.io
+
+.wait-for-kiali-crd:
+	@echo -n "Waiting for the Kiali CRD to be established"
+	@i=0 ;\
+	until [ $${i} -eq 60 ] || ${OC} get crd kialis.kiali.io &> /dev/null; do \
+	    echo -n '.' ; sleep 2 ; (( i++ )) ;\
+	done ;\
+	echo ;\
+	[ $${i} -lt 60 ] || (echo "The Kiali CRD does not exist. You should install the operator." && exit 1)
+	${OC} wait --for condition=established --timeout=60s crd kialis.kiali.io
+
+## run-operator: Runs the Kiali Operator via the ansible-operator locally.
+run-operator: get-ansible-operator crd-create .wait-for-kiali-crd
+	cd ${OPERATOR_DIR} && \
+	ANSIBLE_ROLES_PATH="${OPERATOR_DIR}/roles" \
+	ALLOW_AD_HOC_KIALI_NAMESPACE="true" \
+	ALLOW_AD_HOC_KIALI_IMAGE="true" \
+	ALLOW_ALL_ACCESSIBLE_NAMESPACES="true" \
+	ANSIBLE_VERBOSITY_KIALI_KIALI_IO="1" \
+	ANSIBLE_DEBUG_LOGS="True" \
+	PROFILE_TASKS_TASK_OUTPUT_LIMIT="100" \
+	POD_NAMESPACE="does-not-exist" \
+	WATCH_NAMESPACE="" \
+	PATH="${PATH}:${OUTDIR}/ansible-operator-install" \
+	ansible-operator run --zap-log-level=debug --leader-election-id=kiali-operator

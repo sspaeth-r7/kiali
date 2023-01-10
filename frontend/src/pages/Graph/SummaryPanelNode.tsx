@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { connect } from 'react-redux';
 import { ExternalLinkAltIcon } from '@patternfly/react-icons';
 import {
   getBadge,
@@ -10,10 +9,10 @@ import {
   renderHealth
 } from './SummaryLink';
 import { DecoratedGraphNodeData, DestService, NodeType, RankResult, SummaryPanelPropType } from '../../types/Graph';
-import { summaryHeader, summaryPanel, summaryBodyTabs, summaryFont, getTitle } from './SummaryPanelCommon';
+import { getTitle, summaryBodyTabs, summaryFont, summaryHeader, summaryPanel } from './SummaryPanelCommon';
 import { decoratedNodeData } from '../../components/CytoscapeGraph/CytoscapeGraphUtils';
 import { KialiIcon } from 'config/KialiIcon';
-import { getOptions, clickHandler } from 'components/CytoscapeGraph/ContextMenu/NodeContextMenu';
+import { clickHandler, getOptions } from 'components/CytoscapeGraph/ContextMenu/NodeContextMenu';
 import {
   Dropdown,
   DropdownGroup,
@@ -23,13 +22,19 @@ import {
   KebabToggle,
   Tab
 } from '@patternfly/react-core';
-import { KialiAppState } from 'store/Store';
 import { SummaryPanelNodeTraffic } from './SummaryPanelNodeTraffic';
 import SummaryPanelNodeTraces from './SummaryPanelNodeTraces';
 import SimpleTabs from 'components/Tab/SimpleTabs';
 import { JaegerState } from 'reducers/JaegerState';
 import { classes, style } from 'typestyle';
 import { PFBadge, PFBadges } from 'components/Pf/PfBadges';
+import { ServiceDetailsInfo } from "types/ServiceInfo";
+import { LoadingWizardActionsDropdownGroup } from "components/IstioWizards/LoadingWizardActionsDropdownGroup";
+import { WizardAction, WizardMode } from "components/IstioWizards/WizardActions";
+import ServiceWizardActionsDropdownGroup from "components/IstioWizards/ServiceWizardActionsDropdownGroup";
+import { PeerAuthentication } from "../../types/IstioObjects";
+import { useServiceDetailForGraphNode } from "../../hooks/services";
+import { useKialiSelector } from "../../hooks/redux";
 
 type SummaryPanelNodeState = {
   isActionOpen: boolean;
@@ -41,11 +46,22 @@ const defaultState: SummaryPanelNodeState = {
 
 type ReduxProps = {
   jaegerState: JaegerState;
+  kiosk: string;
   rankResult: RankResult;
   showRank: boolean;
 };
 
-export type SummaryPanelNodeProps = ReduxProps & SummaryPanelPropType;
+export type SummaryPanelNodeHocProps = Omit<SummaryPanelPropType, 'kiosk'> & {
+  onDeleteTrafficRouting?: (key: string, serviceDetails: ServiceDetailsInfo) => void;
+  onLaunchWizard?: (key: WizardAction, mode: WizardMode, namespace: string, serviceDetails: ServiceDetailsInfo, gateways: string[], peerAuths: PeerAuthentication[]) => void;
+};
+
+export type SummaryPanelNodeProps = ReduxProps & SummaryPanelNodeHocProps & {
+  gateways: string[] | null;
+  onKebabToggled?: (isOpen: boolean) => void;
+  peerAuthentications: PeerAuthentication[] | null;
+  serviceDetails: ServiceDetailsInfo | null | undefined;
+};
 
 const expandableSectionStyle = style({
   fontSize: 'var(--graph-side-panel--font-size)',
@@ -104,15 +120,36 @@ export class SummaryPanelNode extends React.Component<SummaryPanelNodeProps, Sum
       this.props.jaegerState.info.enabled &&
       this.props.jaegerState.info.integration;
 
-    const options = getOptions(nodeData, this.props.jaegerState.info).map(o => {
-      return (
-        <DropdownItem key={o.text} onClick={() => clickHandler(o)}>
-          {o.text} {o.target === '_blank' && <ExternalLinkAltIcon />}
-        </DropdownItem>
-      );
-    });
-    const actions =
-      options.length > 0 ? [<DropdownGroup label="Show" className="kiali-group-menu" children={options} />] : undefined;
+    const options = getOptions(nodeData);
+    const items = [
+      <DropdownGroup key="show" label="Show" className="kiali-group-menu">
+        {options.map((o, i) => {
+          return (
+            <DropdownItem key={`option-${i}`} onClick={() => clickHandler(o, this.props.kiosk)}>
+              {o.text} {o.target === '_blank' && <ExternalLinkAltIcon />}
+            </DropdownItem>
+          );
+        })}
+      </DropdownGroup>
+    ];
+
+    if (nodeType === NodeType.SERVICE) {
+      if (this.props.serviceDetails === undefined) {
+        items.push(
+          <LoadingWizardActionsDropdownGroup />
+        );
+      } else if (this.props.serviceDetails !== null) {
+        items.push(
+          <ServiceWizardActionsDropdownGroup
+            virtualServices={this.props.serviceDetails.virtualServices || []}
+            destinationRules={this.props.serviceDetails.destinationRules || []}
+            k8sHTTPRoutes={this.props.serviceDetails.k8sHTTPRoutes || []}
+            istioPermissions={this.props.serviceDetails.istioPermissions}
+            onAction={this.handleLaunchWizard}
+            onDelete={this.handleDeleteTrafficRouting} />
+        );
+      }
+    }
 
     return (
       <div ref={this.mainDivRef} className={`panel panel-default ${summaryPanel}`}>
@@ -120,16 +157,17 @@ export class SummaryPanelNode extends React.Component<SummaryPanelNodeProps, Sum
           {getTitle(nodeType)}
           <div>
             <span>
-              <PFBadge badge={PFBadges.Namespace} style={{ marginBottom: '2px' }} />
+              <PFBadge badge={PFBadges.Namespace} size="sm" style={{ marginBottom: '2px' }} />
               {nodeData.namespace}
-              {actions && (
+              {options.length > 0 && (
                 <Dropdown
+                  dropdownItems={items}
                   id="summary-node-actions"
-                  style={{ float: 'right' }}
-                  isPlain={true}
-                  dropdownItems={actions}
+                  isGrouped={true}
                   isOpen={this.state.isActionOpen}
+                  isPlain={true}
                   position={DropdownPosition.right}
+                  style={{ float: 'right' }}
                   toggle={<KebabToggle id="summary-node-kebab" onToggle={this.onToggleActions} />}
                 />
               )}
@@ -194,6 +232,10 @@ export class SummaryPanelNode extends React.Component<SummaryPanelNodeProps, Sum
       return this.renderHostnamesSection(nodeData.isGateway?.egressInfo?.hostnames);
     }
 
+    if (nodeData.isGateway?.gatewayAPIInfo?.hostnames && nodeData.isGateway?.gatewayAPIInfo?.hostnames.length > 0) {
+      return this.renderHostnamesSection(nodeData.isGateway?.gatewayAPIInfo?.hostnames);
+    }
+
     return null;
   };
 
@@ -247,6 +289,9 @@ export class SummaryPanelNode extends React.Component<SummaryPanelNodeProps, Sum
 
   private onToggleActions = isOpen => {
     this.setState({ isActionOpen: isOpen });
+    if (this.props.onKebabToggled) {
+      this.props.onKebabToggled(isOpen);
+    }
   };
 
   // TODO:(see https://github.com/kiali/kiali-design/issues/63) If we want to show an icon for SE uncomment below
@@ -274,7 +319,8 @@ export class SummaryPanelNode extends React.Component<SummaryPanelNodeProps, Sum
     const shouldRenderGatewayHostnames =
       (nodeData.isGateway?.ingressInfo?.hostnames !== undefined &&
         nodeData.isGateway.ingressInfo.hostnames.length !== 0) ||
-      (nodeData.isGateway?.egressInfo?.hostnames !== undefined && nodeData.isGateway.egressInfo.hostnames.length !== 0);
+      (nodeData.isGateway?.egressInfo?.hostnames !== undefined && nodeData.isGateway.egressInfo.hostnames.length !== 0) ||
+      (nodeData.isGateway?.gatewayAPIInfo?.hostnames !== undefined && nodeData.isGateway.gatewayAPIInfo.hostnames.length !== 0);
     const shouldRenderVsHostnames = nodeData.hasVS?.hostnames !== undefined && nodeData.hasVS?.hostnames.length !== 0;
     const shouldRenderRank = this.props.showRank;
     return (
@@ -382,13 +428,52 @@ export class SummaryPanelNode extends React.Component<SummaryPanelNodeProps, Sum
 
     return entries;
   };
+
+  private handleLaunchWizard = (key: WizardAction, mode: WizardMode) => {
+    this.onToggleActions(false);
+    if (this.props.onLaunchWizard) {
+      const node = this.props.data.summaryTarget;
+      const nodeData = decoratedNodeData(node);
+      this.props.onLaunchWizard(key, mode, nodeData.namespace, this.props.serviceDetails!, this.props.gateways!, this.props.peerAuthentications!);
+    }
+  };
+
+  private handleDeleteTrafficRouting = (key: string) => {
+    this.onToggleActions(false);
+    if (this.props.onDeleteTrafficRouting) {
+      this.props.onDeleteTrafficRouting(key, this.props.serviceDetails!);
+    }
+  }
 }
 
-const mapStateToProps = (state: KialiAppState) => ({
-  jaegerState: state.jaegerState,
-  rankResult: state.graph.rankResult,
-  showRank: state.graph.toolbarState.showRank
-});
+export default function SummaryPanelNodeHOC(props: SummaryPanelNodeHocProps) {
+  const jaegerState = useKialiSelector(state => state.jaegerState);
+  const kiosk = useKialiSelector(state => state.globalState.kiosk);
+  const rankResult = useKialiSelector(state => state.graph.rankResult);
+  const showRank = useKialiSelector(state => state.graph.toolbarState.showRank);
+  const updateTime = useKialiSelector(state => state.graph.updateTime);
 
-const SummaryPanelNodeContainer = connect(mapStateToProps)(SummaryPanelNode);
-export default SummaryPanelNodeContainer;
+  const [isKebabOpen, setIsKebabOpen] = React.useState<boolean>(false);
+
+  const node = props.data.summaryTarget;
+  const nodeData = decoratedNodeData(node);
+  const [serviceDetails, gateways, peerAuthentications, isServiceDetailsLoading] = useServiceDetailForGraphNode(nodeData, isKebabOpen, props.duration, updateTime);
+
+  function handleKebabToggled(isOpen: boolean) {
+    setIsKebabOpen(isOpen);
+  }
+
+  return (
+    <SummaryPanelNode
+      jaegerState={jaegerState}
+      kiosk={kiosk}
+      rankResult={rankResult}
+      showRank={showRank}
+      serviceDetails={isServiceDetailsLoading ? undefined : serviceDetails}
+      gateways={gateways}
+      peerAuthentications={peerAuthentications}
+      onKebabToggled={handleKebabToggled}
+      {...props} />
+  );
+}
+

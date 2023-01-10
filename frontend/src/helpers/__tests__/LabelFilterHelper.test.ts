@@ -1,4 +1,4 @@
-import { filterByLabel } from '../LabelFilterHelper';
+import { filterByLabel, isGateway } from '../LabelFilterHelper';
 import { AppListItem } from '../../types/AppList';
 import { AppHealth, WorkloadHealth, ServiceHealth } from '../../types/Health';
 import { WorkloadListItem } from '../../types/Workload';
@@ -144,6 +144,7 @@ const serviceList: ServiceListItem[] = [
     name: 'details',
     istioSidecar: false,
     labels: { app: 'details', service: 'details' },
+    ports: { http: 9080 },
     validation: { name: 'details', objectType: 'service', valid: true, checks: [] },
     istioReferences: [],
     kialiWizard: '',
@@ -155,6 +156,7 @@ const serviceList: ServiceListItem[] = [
     name: 'reviews',
     istioSidecar: false,
     labels: { app: 'reviews', service: 'reviews' },
+    ports: { http: 9080 },
     validation: { name: 'reviews', objectType: 'service', valid: true, checks: [] },
     istioReferences: [],
     kialiWizard: '',
@@ -166,6 +168,7 @@ const serviceList: ServiceListItem[] = [
     name: 'ratings',
     istioSidecar: false,
     labels: { app: 'ratings', service: 'ratings' },
+    ports: { http: 9080 },
     validation: { name: 'ratings', objectType: 'service', valid: true, checks: [] },
     istioReferences: [],
     kialiWizard: '',
@@ -177,6 +180,7 @@ const serviceList: ServiceListItem[] = [
     name: 'productpage',
     istioSidecar: false,
     labels: { app: 'productpage', service: 'productpage' },
+    ports: { http: 9080 },
     validation: { name: 'productpage', objectType: 'service', valid: true, checks: [] },
     istioReferences: [],
     kialiWizard: '',
@@ -279,11 +283,27 @@ describe('LabelFilter', () => {
         name: 'details',
         istioSidecar: false,
         labels: { app: 'details', service: 'details' },
+        ports: { http: 9080 },
         validation: { name: 'details', objectType: 'service', valid: true, checks: [] },
         istioReferences: [],
         kialiWizard: '',
         serviceRegistry: 'Kubernetes'
       }
     ]);
+  });
+
+  it('check is Ingress/Egress Gateway when false', () => {
+    const result = isGateway({'istio': 'wrong'});
+    expect(result).toBeFalsy();
+  });
+
+  it('check is Ingress Gateway when true', () => {
+    const result = isGateway({'istio': 'ingressgateway'});
+    expect(result).toBeTruthy();
+  });
+
+  it('check is Egress Gateway when true', () => {
+    const result = isGateway({'istio': 'egressgateway'});
+    expect(result).toBeTruthy();
   });
 });

@@ -12,6 +12,7 @@ import NamespaceInfo from '../../pages/Overview/NamespaceInfo';
 import * as React from 'react';
 import { StatefulFilters } from '../Filters/StatefulFilters';
 import { PFBadges, PFBadgeType } from '../../components/Pf/PfBadges';
+import { isGateway } from "../../helpers/LabelFilterHelper";
 
 export type SortResource = AppListItem | WorkloadListItem | ServiceListItem;
 export type TResource = SortResource | IstioConfigItem;
@@ -30,7 +31,7 @@ export function hasHealth(r: RenderResource): r is SortResource {
 }
 
 export const hasMissingSidecar = (r: SortResource): boolean => {
-  return !isIstioNamespace(r.namespace) && !r.istioSidecar;
+  return !isIstioNamespace(r.namespace) && !r.istioSidecar && !isGateway(r.labels);
 };
 
 type ResourceType<R extends RenderResource> = {
@@ -173,6 +174,9 @@ type istioConfigType = {
 
 export const IstioTypes = {
   gateway: { name: 'Gateway', url: 'gateways', badge: PFBadges.Gateway } as istioConfigType,
+  httproute: { name: 'HTTPRoute', url: 'k8shttproutes', badge: PFBadges.HTTPRoute } as istioConfigType,
+  k8sgateway: { name: 'Gateway (K8s)', url: 'k8sgateways', badge: PFBadges.K8sGateway } as istioConfigType,
+  k8shttproute: { name: 'HTTPRoute (K8s)', url: 'k8shttproutes', badge: PFBadges.K8sHTTPRoute } as istioConfigType,
   virtualservice: { name: 'VirtualService', url: 'virtualservices', badge: PFBadges.VirtualService } as istioConfigType,
   destinationrule: {
     name: 'DestinationRule',
@@ -218,6 +222,8 @@ export const IstioTypes = {
   workloadentry: { name: 'WorkloadEntry', url: 'workloadentries', badge: PFBadges.WorkloadEntry } as istioConfigType,
   workloadgroup: { name: 'WorkloadGroup', url: 'workloadgroups', badge: PFBadges.WorkloadGroup } as istioConfigType,
   envoyfilter: { name: 'EnvoyFilter', url: 'envoyfilters', badge: PFBadges.EnvoyFilter } as istioConfigType,
+  wasmplugin: {name: 'WasmPlugin', url: 'wasmplugins', badge: PFBadges.WasmPlugin} as istioConfigType,
+  telemetry: {name: 'Telemetry', url: 'telemetries', badge: PFBadges.Telemetry} as istioConfigType,
   attributemanifest: {
     name: 'AttributeManifest',
     url: 'attributemanifests',

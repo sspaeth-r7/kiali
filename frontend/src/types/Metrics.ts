@@ -1,5 +1,5 @@
-// First is timestamp, second is value
-export type Datapoint = [number, number];
+// First is timestamp, second is value, third is y0
+export type Datapoint = [number, number, number?];
 
 export interface Metric {
   labels: Labels;
@@ -7,6 +7,12 @@ export interface Metric {
   name: string;
   stat?: string;
 }
+
+export type ControlPlaneMetricsMap = {
+  istiod_proxy_time?: Metric[];
+  istiod_cpu?: Metric[];
+  istiod_mem?: Metric[];
+};
 
 export type IstioMetricsMap = {
   grpc_received?: Metric[];
@@ -20,6 +26,9 @@ export type IstioMetricsMap = {
   response_size?: Metric[];
   tcp_received?: Metric[];
   tcp_sent?: Metric[];
+  pilot_proxy_convergence_time?: Metric[];
+  process_cpu_seconds_total?: Metric[];
+  process_virtual_memory_bytes?: Metric[];
 };
 
 export enum MetricsObjectTypes {
@@ -39,6 +48,7 @@ export interface MetricsStatsResult {
 export type MetricsStatsMap = { [key: string]: MetricsStats };
 
 export interface MetricsStats {
+  isCompact: boolean;
   responseTimes: Stat[];
 }
 

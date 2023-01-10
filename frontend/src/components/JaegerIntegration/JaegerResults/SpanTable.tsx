@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
+import { KialiDispatch } from 'types/Redux';
 import {
   Button,
   ButtonVariant,
@@ -29,7 +29,6 @@ import {
 import { compareNullable } from 'components/FilterList/FilterHelper';
 import { MetricsStats } from 'types/Metrics';
 import { KialiAppState } from 'store/Store';
-import { KialiAppAction } from 'actions/KialiAppAction';
 import { MetricsStatsQuery } from 'types/MetricsOptions';
 import MetricsStatsThunkActions from 'actions/MetricsStatsThunkActions';
 import { EnvoySpanInfo, OpenTracingHTTPInfo, OpenTracingTCPInfo, RichSpanData } from 'types/JaegerInfo';
@@ -45,14 +44,19 @@ import responseFlags from 'utils/ResponseFlags';
 import { renderMetricsComparison } from './StatsComparison';
 import history from 'app/History';
 import { AngleDownIcon, AngleRightIcon, ExternalLinkAltIcon } from '@patternfly/react-icons';
+import { isParentKiosk, kioskContextMenuAction } from '../../Kiosk/KioskActions';
 
-interface Props {
+type ReduxProps = {
+  kiosk: string;
+  loadMetricsStats: (queries: MetricsStatsQuery[], isCompact: boolean) => void;
+  metricsStats: Map<string, MetricsStats>;
+};
+
+type Props = ReduxProps & {
   externalURL?: string;
   items: RichSpanData[];
   namespace: string;
-  loadMetricsStats: (queries: MetricsStatsQuery[]) => void;
-  metricsStats: Map<string, MetricsStats>;
-}
+};
 
 interface State {
   expandedSpans: Map<string, boolean>;
@@ -173,8 +177,8 @@ class SpanTable extends React.Component<Props, State> {
   }
 
   private fetchComparisonMetrics(items: RichSpanData[]) {
-    const queries = buildQueriesFromSpans(items);
-    this.props.loadMetricsStats(queries);
+    const queries = buildQueriesFromSpans(items, false);
+    this.props.loadMetricsStats(queries, false);
   }
 
   private rows = (): IRow[] => {
@@ -192,8 +196,9 @@ class SpanTable extends React.Component<Props, State> {
 
     return {
       cells: [
-        <div key={`${item.spanID}-duration`}>
+        <>
           <Button
+            key={`${item.spanID}-duration`}
             style={{ padding: '6px 4px 6px 0' }}
             variant={ButtonVariant.link}
             onClick={() => this.toggleExpanded(item.spanID)}
@@ -201,7 +206,7 @@ class SpanTable extends React.Component<Props, State> {
             {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
           </Button>
           {formatDuration(item.relativeStartTime)}
-        </div>,
+        </>,
         this.OriginCell(item),
         this.SummaryCell(item),
         this.StatsCell(item)
@@ -216,7 +221,7 @@ class SpanTable extends React.Component<Props, State> {
     _extraData: IExtraRowData
   ): (IAction | ISeparator)[] => {
     const item = rowData.item;
-
+    const parentKiosk = isParentKiosk(this.props.kiosk);
     const appActions: IAction[] = [
       {
         isDisabled: true,
@@ -229,11 +234,25 @@ class SpanTable extends React.Component<Props, State> {
       },
       {
         title: 'Inbound Metrics',
-        onClick: (_event, _rowId, rowData, _extra) => history.push(rowData.item.linkToApp + '?tab=in_metrics')
+        onClick: (_event, _rowId, rowData, _extra) => {
+          const href = rowData.item.linkToApp + '?tab=in_metrics';
+          if (parentKiosk) {
+            kioskContextMenuAction(href);
+          } else {
+            history.push(href);
+          }
+        }
       },
       {
         title: 'Outbound Metrics',
-        onClick: (_event, _rowId, rowData, _extra) => history.push(rowData.item.linkToApp + '?tab=out_metrics')
+        onClick: (_event, _rowId, rowData, _extra) => {
+          const href = rowData.item.linkToApp + '?tab=out_metrics';
+          if (parentKiosk) {
+            kioskContextMenuAction(href);
+          } else {
+            history.push(href);
+          }
+        }
       }
     ];
 
@@ -251,15 +270,36 @@ class SpanTable extends React.Component<Props, State> {
         },
         {
           title: 'Logs',
-          onClick: (_event, _rowId, rowData, _extra) => history.push(rowData.item.linkToWorkload + '?tab=logs')
+          onClick: (_event, _rowId, rowData, _extra) => {
+            const href = rowData.item.linkToWorkload + '?tab=logs';
+            if (parentKiosk) {
+              kioskContextMenuAction(href);
+            } else {
+              history.push(href);
+            }
+          }
         },
         {
           title: 'Inbound Metrics',
-          onClick: (_event, _rowId, rowData, _extra) => history.push(rowData.item.linkToWorkload + '?tab=in_metrics')
+          onClick: (_event, _rowId, rowData, _extra) => {
+            const href = rowData.item.linkToWorkload + '?tab=in_metrics';
+            if (parentKiosk) {
+              kioskContextMenuAction(href);
+            } else {
+              history.push(href);
+            }
+          }
         },
         {
           title: 'Outbound Metrics',
-          onClick: (_event, _rowId, rowData, _extra) => history.push(rowData.item.linkToWorkload + '?tab=out_metrics')
+          onClick: (_event, _rowId, rowData, _extra) => {
+            const href = rowData.item.linkToWorkload + '?tab=out_metrics';
+            if (parentKiosk) {
+              kioskContextMenuAction(href);
+            } else {
+              history.push(href);
+            }
+          }
         }
       ];
     }
@@ -283,7 +323,11 @@ class SpanTable extends React.Component<Props, State> {
       ];
     }
 
-    return [...appActions, ...workloadActions, ...tracingActions];
+    // Parent Kiosk won't have links to the app details
+    // as most of the kubernetes consoles don't have an unified "app" entity
+    return parentKiosk
+      ? [...workloadActions, ...tracingActions]
+      : [...appActions, ...workloadActions, ...tracingActions];
   };
 
   private isExpanded = (spanID: string): boolean => {
@@ -297,67 +341,120 @@ class SpanTable extends React.Component<Props, State> {
   };
 
   private OriginCell = (item: RichSpanData): React.ReactNode => {
+    const parentKiosk = isParentKiosk(this.props.kiosk);
+    const key = `${item.spanID}-origin`;
     return (
-      <div key={`${item.spanID}-origin`}>
-        <strong>Application: </strong>
-        {(item.linkToApp && <Link to={item.linkToApp}>{item.app}</Link>) || item.app}
-        <br />
-        <strong>Workload: </strong>
-        {(item.linkToWorkload && <Link to={item.linkToWorkload}>{item.workload}</Link>) || 'unknown'}
+      <>
+        <strong key={`${key}-app`}>Application: </strong>
+        {(item.linkToApp &&
+          (parentKiosk ? (
+            <Link
+              key={`${key}-link-app`}
+              to={''}
+              onClick={() => {
+                if (item.linkToApp) {
+                  kioskContextMenuAction(item.linkToApp);
+                }
+              }}
+            >
+              {item.app}
+            </Link>
+          ) : (
+            <Link key={`${key}-link-app`} to={item.linkToApp}>
+              {item.app}
+            </Link>
+          ))) ||
+          item.app}
+        <br key={`${key}-br`} />
+        <strong key={`${key}-wl`}>Workload: </strong>
+        {(item.linkToWorkload &&
+          (parentKiosk ? (
+            <Link
+              key={`${key}-link-wl`}
+              to={''}
+              onClick={() => {
+                if (item.linkToWorkload) {
+                  kioskContextMenuAction(item.linkToWorkload);
+                }
+              }}
+            >
+              {item.workload}
+            </Link>
+          ) : (
+            <Link key={`${key}-link-wl`} to={item.linkToWorkload}>
+              {item.workload}
+            </Link>
+          ))) ||
+          'unknown'}
         {this.isExpanded(item.spanID) && (
-          <>
-            <br />
-            <strong>Pod: </strong>
+          <div key={`${key}-expanded-br-1`}>
+            <strong key={`${key}-expanded-pod`}>Pod: </strong>
             {item.pod || 'unknown'}
-            <br />
-          </>
+          </div>
         )}
-      </div>
+      </>
     );
   };
 
   private SummaryCell = (item: RichSpanData): React.ReactNode => {
     const flag = (item.info as EnvoySpanInfo).responseFlags;
+    const key = `${item.spanID}-summary`;
     return (
-      <div key={`${item.spanID}-summary`}>
+      <>
         {item.info.hasError && (
-          <div>
-            <ExclamationCircleIcon color={PFColors.Danger} /> <strong>This span reported an error</strong>
+          <div key={`${key}-err`}>
+            <ExclamationCircleIcon key={`${key}-err-ic`} color={PFColors.Danger} />{' '}
+            <strong key={`${key}-err-msg`}>This span reported an error</strong>
           </div>
         )}
-        <div>
-          <strong>Operation: </strong>
+        <div key={`${key}-op`}>
+          <strong key={`${key}-op-title`}>Operation: </strong>
           {flag ? (
-            <>
-              {item.operationName} ({flag} <ExclamationCircleIcon color={PFColors.Danger} />)
-            </>
+            <span key={`${key}-op-name`}>
+              {item.operationName} ({flag} <ExclamationCircleIcon key={`${key}-dan-ic`} color={PFColors.Danger} />)
+            </span>
           ) : (
-            <>{item.operationName}</>
+            <span key={`${key}-op-name`}>{item.operationName}</span>
           )}
         </div>
-        <div>
-          <strong>Component: </strong>
+        <div key={`${key}-comp`}>
+          <strong key={`${key}-comp=-title`}>Component: </strong>
           {item.component}
         </div>
         {this.isExpanded(item.spanID) &&
           ((item.type === 'envoy' && this.renderEnvoySummary(item)) ||
             (item.type === 'http' && this.renderHTTPSummary(item)) ||
             (item.type === 'tcp' && this.renderTCPSummary(item)))}
-      </div>
+      </>
     );
   };
 
   private renderEnvoySummary = (item: RichSpanData) => {
+    const parentKiosk = isParentKiosk(this.props.kiosk);
     const info = item.info as EnvoySpanInfo;
     let rqLabel = 'Request';
     let peerLink: JSX.Element | undefined = undefined;
+    const key = `${item.spanID}-summary-envoy`;
     if (info.direction === 'inbound') {
       rqLabel = 'Received request';
       if (info.peer) {
         peerLink = (
           <>
             {' from '}
-            <Link to={'/namespaces/' + info.peer.namespace + '/workloads/' + info.peer.name}>{info.peer.name}</Link>
+            {parentKiosk ? (
+              <Link
+                to={''}
+                onClick={() => {
+                  if (info.peer) {
+                    kioskContextMenuAction('/namespaces/' + info.peer.namespace + '/workloads/' + info.peer.name);
+                  }
+                }}
+              >
+                {info.peer.name}
+              </Link>
+            ) : (
+              <Link to={'/namespaces/' + info.peer.namespace + '/workloads/' + info.peer.name}>{info.peer.name}</Link>
+            )}
           </>
         );
       }
@@ -365,10 +462,26 @@ class SpanTable extends React.Component<Props, State> {
       rqLabel = 'Sent request';
       if (info.peer) {
         peerLink = (
-          <>
-            {' to '}
-            <Link to={'/namespaces/' + info.peer.namespace + '/services/' + info.peer.name}>{info.peer.name}</Link>
-          </>
+          <React.Fragment key={`${key}-out`}>
+            <span key={`${key}-out-to`}>{' to '}</span>
+            {parentKiosk ? (
+              <Link
+                key={`${key}-out-link`}
+                to={''}
+                onClick={() => {
+                  if (info.peer) {
+                    kioskContextMenuAction('/namespaces/' + info.peer.namespace + '/services/' + info.peer.name);
+                  }
+                }}
+              >
+                {info.peer.name}
+              </Link>
+            ) : (
+              <Link key={`${key}-out-link`} to={'/namespaces/' + info.peer.namespace + '/services/' + info.peer.name}>
+                {info.peer.name}
+              </Link>
+            )}
+          </React.Fragment>
         );
       }
     }
@@ -383,20 +496,22 @@ class SpanTable extends React.Component<Props, State> {
     }
 
     return (
-      <>
-        <div>
-          <strong>
+      <React.Fragment key={`${key}`}>
+        <div key={`${key}-req`}>
+          <strong key={`${key}-req-title`}>
             {rqLabel}
             {peerLink}:{' '}
           </strong>
-          {info.method} {info.url}
+          <span key={`${key}-req-val`}>
+            {info.method} {info.url}
+          </span>
         </div>
-        <div>
-          <strong>Response status: </strong>
-          {rsDetails.join(', ')}
+        <div key={`${key}-status`}>
+          <strong key={`${key}-status-title`}>Response status: </strong>
+          <span key={`${key}-status-val`}>{rsDetails.join(', ')}</span>
         </div>
-        {flagInfo}
-      </>
+        <span key={`${key}-flag`}>{flagInfo}</span>
+      </React.Fragment>
     );
   };
 
@@ -404,41 +519,46 @@ class SpanTable extends React.Component<Props, State> {
     const info = item.info as OpenTracingHTTPInfo;
     const rqLabel =
       info.direction === 'inbound' ? 'Received request' : info.direction === 'outbound' ? 'Sent request' : 'Request';
+    const key = `${item.spanID}-summary-http`;
     return (
-      <>
-        <div>
-          <strong>{rqLabel}: </strong>
-          {info.method} {info.url}
+      <React.Fragment key={key}>
+        <div key={`${key}-req`}>
+          <strong key={`${key}-req-title`}>{rqLabel}: </strong>
+          <span key={`${key}-req-val`}>
+            {info.method} {info.url}
+          </span>
         </div>
         {info.statusCode && (
-          <div>
-            <strong>Response status: </strong>
-            {info.statusCode}
+          <div key={`${key}-code`}>
+            <strong key={`${key}-code-title`}>Response status: </strong>
+            <span key={`${key}-code-val`}>{info.statusCode}</span>
           </div>
         )}
-      </>
+      </React.Fragment>
     );
   };
 
   private renderTCPSummary = (item: RichSpanData) => {
     const info = item.info as OpenTracingTCPInfo;
+    const key = `${item.spanID}-summary-tcp`;
     return (
-      <>
+      <React.Fragment key={key}>
         {info.topic && (
-          <div>
-            <strong>Topic: </strong>
-            {info.topic}
+          <div key={`${key}-topic`}>
+            <strong key={`${key}-topic-title`}>Topic: </strong>
+            <span key={`${key}-topic-val`}>{info.topic}</span>
           </div>
         )}
-      </>
+      </React.Fragment>
     );
   };
 
   private StatsCell = (item: RichSpanData): React.ReactNode => {
+    const key = `${item.spanID}-stats`;
     return (
-      <div key={`${item.spanID}-stats`}>
-        <div>
-          <strong>Duration: </strong>
+      <div key={key}>
+        <div key={`${key}-dur-div`}>
+          <strong key={`${key}-dur-title`}>Duration: </strong>
           {formatDuration(item.duration)}
         </div>
         {item.type === 'envoy' &&
@@ -451,11 +571,13 @@ class SpanTable extends React.Component<Props, State> {
 }
 
 const mapStateToProps = (state: KialiAppState) => ({
+  kiosk: state.globalState.kiosk,
   metricsStats: state.metricsStats.data
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
-  loadMetricsStats: (queries: MetricsStatsQuery[]) => dispatch(MetricsStatsThunkActions.load(queries))
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
+  loadMetricsStats: (queries: MetricsStatsQuery[], isCompact: boolean) =>
+    dispatch(MetricsStatsThunkActions.load(queries, isCompact))
 });
 
 const Container = connect(mapStateToProps, mapDispatchToProps)(SpanTable);

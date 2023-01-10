@@ -14,14 +14,15 @@ import { retrieveTimeRange, storeTimeRange } from './TimeRangeHelper';
 import { DateTimePicker } from './DateTimePicker';
 import { KialiAppState } from '../../store/Store';
 import { timeRangeSelector } from '../../store/Selectors';
-import { ThunkDispatch } from 'redux-thunk';
-import { KialiAppAction } from '../../actions/KialiAppAction';
+import { KialiDispatch } from 'types/Redux';
 import { UserSettingsActions } from '../../actions/UserSettingsActions';
 import { connect } from 'react-redux';
 import { bindActionCreators } from 'redux';
 import { style } from 'typestyle';
 
 type Props = {
+  manageURL?: boolean;
+  menuAppendTo?: HTMLElement | (() => HTMLElement) | 'parent' | 'inline';
   timeRange: TimeRange;
   tooltip: string;
   setTimeRange: (range: TimeRange) => void;
@@ -31,18 +32,20 @@ const labelStyle = style({
   margin: '5px 5px 0px 5px'
 });
 
-class TimeRangeComponent extends React.Component<Props> {
+export class TimeRangeComponent extends React.Component<Props> {
   constructor(props: Props) {
     super(props);
     const range = retrieveTimeRange();
     if ((range.rangeDuration !== undefined || range.from !== undefined) && !isEqualTimeRange(props.timeRange, range)) {
       this.props.setTimeRange(range);
     }
-    storeTimeRange(this.props.timeRange);
+    this.storeTimeRange(this.props.timeRange);
   }
 
-  componentDidUpdate() {
-    storeTimeRange(this.props.timeRange);
+  componentDidUpdate(prevProps: Props) {
+    if (prevProps.timeRange !== this.props.timeRange) {
+      this.storeTimeRange(this.props.timeRange);
+    }
   }
 
   onDurationChanged = (key: string) => {
@@ -101,6 +104,7 @@ class TimeRangeComponent extends React.Component<Props> {
         initialLabel={d ? serverConfig.durations[d] : 'Custom'}
         options={options}
         tooltip={this.props.tooltip}
+        menuAppendTo={this.props.menuAppendTo}
       />
     );
   }
@@ -116,6 +120,12 @@ class TimeRangeComponent extends React.Component<Props> {
       </>
     );
   }
+
+  private storeTimeRange(timeRange: TimeRange) {
+    if (this.props.manageURL) {
+      storeTimeRange(timeRange);
+    }
+  }
 }
 
 const mapStateToProps = (state: KialiAppState) => {
@@ -124,7 +134,7 @@ const mapStateToProps = (state: KialiAppState) => {
   };
 };
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => {
+const mapDispatchToProps = (dispatch: KialiDispatch) => {
   return {
     setTimeRange: bindActionCreators(UserSettingsActions.setTimeRange, dispatch)
   };

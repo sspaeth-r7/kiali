@@ -12,7 +12,6 @@ import (
 	security_v1beta "istio.io/client-go/pkg/apis/security/v1beta1"
 	apps_v1 "k8s.io/api/apps/v1"
 	batch_v1 "k8s.io/api/batch/v1"
-	batch_v1beta1 "k8s.io/api/batch/v1beta1"
 	core_v1 "k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,10 +30,23 @@ func TestGetNamespaceValidations(t *testing.T) {
 	conf := config.NewConfig()
 	config.Set(conf)
 
-	vs := mockCombinedValidationService(fakeEmptyIstioConfigList(),
+	vs := mockCombinedValidationService(fakeIstioConfigList(),
 		[]string{"details.test.svc.cluster.local", "product.test.svc.cluster.local", "product2.test.svc.cluster.local", "customer.test.svc.cluster.local"}, "test", fakePods())
 
 	validations, _ := vs.GetValidations(context.TODO(), "test", "", "")
+	assert.NotEmpty(validations)
+	assert.True(validations[models.IstioValidationKey{ObjectType: "virtualservice", Namespace: "test", Name: "product-vs"}].Valid)
+}
+
+func TestGetAllValidations(t *testing.T) {
+	assert := assert.New(t)
+	conf := config.NewConfig()
+	config.Set(conf)
+
+	vs := mockCombinedValidationService(fakeIstioConfigList(),
+		[]string{"details.test.svc.cluster.local", "product.test.svc.cluster.local", "product2.test.svc.cluster.local", "customer.test.svc.cluster.local"}, "test", fakePods())
+
+	validations, _ := vs.GetValidations(context.TODO(), "", "", "")
 	assert.NotEmpty(validations)
 	assert.True(validations[models.IstioValidationKey{ObjectType: "virtualservice", Namespace: "test", Name: "product-vs"}].Valid)
 }
@@ -44,7 +56,7 @@ func TestGetIstioObjectValidations(t *testing.T) {
 	conf := config.NewConfig()
 	config.Set(conf)
 
-	vs := mockCombinedValidationService(fakeEmptyIstioConfigList(),
+	vs := mockCombinedValidationService(fakeIstioConfigList(),
 		[]string{"details.test.svc.cluster.local", "product.test.svc.cluster.local", "customer.test.svc.cluster.local"}, "test", fakePods())
 
 	validations, _, _ := vs.GetIstioObjectValidations(context.TODO(), "test", "virtualservices", "product-vs")
@@ -67,7 +79,7 @@ func TestFilterExportToNamespacesVS(t *testing.T) {
 	conf := config.NewConfig()
 	config.Set(conf)
 
-	var currentIstioObjects []networking_v1beta1.VirtualService
+	var currentIstioObjects []*networking_v1beta1.VirtualService
 	vs1to3 := loadVirtualService("vs_bookinfo1_to_2_3.yaml", t)
 	currentIstioObjects = append(currentIstioObjects, vs1to3)
 	vs1tothis := loadVirtualService("vs_bookinfo1_to_this.yaml", t)
@@ -82,7 +94,7 @@ func TestFilterExportToNamespacesVS(t *testing.T) {
 	currentIstioObjects = append(currentIstioObjects, vs3toall)
 	v := mockEmptyValidationService()
 	filteredVSs := v.filterVSExportToNamespaces("bookinfo", currentIstioObjects)
-	var expectedVS []networking_v1beta1.VirtualService
+	var expectedVS []*networking_v1beta1.VirtualService
 	expectedVS = append(expectedVS, vs1tothis)
 	expectedVS = append(expectedVS, vs2to1)
 	expectedVS = append(expectedVS, vs3toall)
@@ -102,7 +114,7 @@ func TestGetVSReferences(t *testing.T) {
 	conf := config.NewConfig()
 	config.Set(conf)
 
-	vs := mockCombinedValidationService(fakeEmptyIstioConfigList(), []string{}, "test", fakePods())
+	vs := mockCombinedValidationService(fakeIstioConfigList(), []string{}, "test", fakePods())
 
 	_, referencesMap, err := vs.GetIstioObjectValidations(context.TODO(), "test", kubernetes.VirtualServices, "product-vs")
 	references := referencesMap[models.IstioReferenceKey{ObjectType: "virtualservice", Namespace: "test", Name: "product-vs"}]
@@ -135,6 +147,7 @@ func TestGetVSReferencesNotExisting(t *testing.T) {
 func mockWorkLoadService(k8s *kubetest.K8SClientMock) WorkloadService {
 	// Setup mocks
 	k8s.On("IsOpenShift").Return(true)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDepSyncedWithRS(), nil)
 	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
 	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeRSSyncedWithPods(), nil)
@@ -142,17 +155,18 @@ func mockWorkLoadService(k8s *kubetest.K8SClientMock) WorkloadService {
 	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
 	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
 	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
+	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.CronJob{}, nil)
 	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(fakePods().Items, nil)
 	k8s.On("GetConfigMap", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&core_v1.ConfigMap{}, nil)
 
-	svc := setupWorkloadService(k8s)
+	svc := setupWorkloadService(k8s, config.Get())
 	return svc
 }
 
 func mockMultiNamespaceGatewaysValidationService() IstioValidationsService {
 	k8s := new(kubetest.K8SClientMock)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("GetNamespace", mock.AnythingOfType("string")).Return(&core_v1.Namespace{}, nil)
 	k8s.On("IsMaistraApi").Return(false)
 	k8s.On("GetNamespaces", mock.AnythingOfType("string")).Return(fakeNamespaces(), nil)
@@ -188,19 +202,20 @@ func mockCombinedValidationService(istioConfigList *models.IstioConfigList, serv
 	k8s.MockIstio(fakeIstioObjects...)
 
 	kialiCache = cache.FakeServicesKialiCache(data.CreateFakeMultiRegistryServices(services, "test", "*"),
-		fakeIstioConfigList().Gateways,
-		fakeIstioConfigList().VirtualServices,
-		fakeIstioConfigList().DestinationRules,
-		fakeIstioConfigList().ServiceEntries,
-		fakeIstioConfigList().Sidecars,
-		fakeIstioConfigList().RequestAuthentications,
-		fakeIstioConfigList().WorkloadEntries)
+		istioConfigList.Gateways,
+		istioConfigList.VirtualServices,
+		istioConfigList.DestinationRules,
+		istioConfigList.ServiceEntries,
+		istioConfigList.Sidecars,
+		istioConfigList.RequestAuthentications,
+		istioConfigList.WorkloadEntries)
 
 	k8s.On("GetToken").Return("token")
 	k8s.On("GetServices", mock.AnythingOfType("string"), mock.AnythingOfType("map[string]string")).Return(fakeCombinedServices(services, "test"), nil)
 	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDepSyncedWithRS(), nil)
 	k8s.On("GetNamespace", mock.AnythingOfType("string")).Return(kubetest.FakeNamespace("test"), nil)
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("IsMaistraApi").Return(false)
 	k8s.On("GetNamespaces", mock.AnythingOfType("string")).Return(fakeNamespaces(), nil)
 
@@ -215,6 +230,7 @@ func mockEmptyValidationService() IstioValidationsService {
 	k8s := new(kubetest.K8SClientMock)
 	k8s.MockIstio()
 	k8s.On("IsOpenShift").Return(false)
+	k8s.On("IsGatewayAPI").Return(false)
 	k8s.On("IsMaistraApi").Return(false)
 	return IstioValidationsService{k8s: k8s, businessLayer: NewWithBackends(k8s, nil, nil)}
 }
@@ -226,14 +242,15 @@ func fakeEmptyIstioConfigList() *models.IstioConfigList {
 func fakeIstioConfigList() *models.IstioConfigList {
 	istioConfigList := models.IstioConfigList{}
 
-	istioConfigList.VirtualServices = []networking_v1beta1.VirtualService{
-		*data.AddHttpRoutesToVirtualService(data.CreateHttpRouteDestination("product", "v1", -1),
+	istioConfigList.VirtualServices = []*networking_v1beta1.VirtualService{
+		data.AddHttpRoutesToVirtualService(data.CreateHttpRouteDestination("product", "v1", -1),
 			data.AddTcpRoutesToVirtualService(data.CreateTcpRoute("product2", "v1", -1),
-				data.CreateEmptyVirtualService("product-vs", "test", []string{"product"})))}
+				data.CreateEmptyVirtualService("product-vs", "test", []string{"product"}))),
+	}
 
-	istioConfigList.DestinationRules = []networking_v1beta1.DestinationRule{
-		*data.AddSubsetToDestinationRule(data.CreateSubset("v1", "v1"), data.CreateEmptyDestinationRule("test", "product-dr", "product")),
-		*data.CreateEmptyDestinationRule("test", "customer-dr", "customer"),
+	istioConfigList.DestinationRules = []*networking_v1beta1.DestinationRule{
+		data.AddSubsetToDestinationRule(data.CreateSubset("v1", "v1"), data.CreateEmptyDestinationRule("test", "product-dr", "product")),
+		data.CreateEmptyDestinationRule("test", "customer-dr", "customer"),
 	}
 
 	istioConfigList.Gateways = append(getGateway("first", "test"), getGateway("second", "test2")...)
@@ -241,17 +258,17 @@ func fakeIstioConfigList() *models.IstioConfigList {
 	return &istioConfigList
 }
 
-func fakeMeshPolicies() []security_v1beta.PeerAuthentication {
-	return []security_v1beta.PeerAuthentication{
-		*data.CreateEmptyMeshPeerAuthentication("default", nil),
-		*data.CreateEmptyMeshPeerAuthentication("test", nil),
+func fakeMeshPolicies() []*security_v1beta.PeerAuthentication {
+	return []*security_v1beta.PeerAuthentication{
+		data.CreateEmptyMeshPeerAuthentication("default", nil),
+		data.CreateEmptyMeshPeerAuthentication("test", nil),
 	}
 }
 
-func fakePolicies() []security_v1beta.PeerAuthentication {
-	return []security_v1beta.PeerAuthentication{
-		*data.CreateEmptyPeerAuthentication("default", "bookinfo", nil),
-		*data.CreateEmptyPeerAuthentication("test", "foo", nil),
+func fakePolicies() []*security_v1beta.PeerAuthentication {
+	return []*security_v1beta.PeerAuthentication{
+		data.CreateEmptyPeerAuthentication("default", "bookinfo", nil),
+		data.CreateEmptyPeerAuthentication("test", "foo", nil),
 	}
 }
 
@@ -313,15 +330,16 @@ func fakePods() *core_v1.PodList {
 	}
 }
 
-func getGateway(name, namespace string) []networking_v1beta1.Gateway {
-	return []networking_v1beta1.Gateway{
-		*data.AddServerToGateway(data.CreateServer([]string{"valid"}, 80, "http", "http"),
+func getGateway(name, namespace string) []*networking_v1beta1.Gateway {
+	return []*networking_v1beta1.Gateway{
+		data.AddServerToGateway(data.CreateServer([]string{"valid"}, 80, "http", "http"),
 			data.CreateEmptyGateway(name, namespace, map[string]string{
 				"app": "real",
-			}))}
+			})),
+	}
 }
 
-func loadVirtualService(file string, t *testing.T) networking_v1beta1.VirtualService {
+func loadVirtualService(file string, t *testing.T) *networking_v1beta1.VirtualService {
 	loader := yamlFixtureLoaderFor(file)
 	err := loader.Load()
 	if err != nil {

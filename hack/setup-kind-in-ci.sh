@@ -39,6 +39,7 @@ set -e
 
 # set up some of our defaults
 DORP="${DORP:-docker}"
+AUTH_STRATEGY="${AUTH_STRATEGY:-anonymous}"
 
 # Defaults the branch to master unless it is already set
 TARGET_BRANCH="${TARGET_BRANCH:-master}"
@@ -51,17 +52,15 @@ if [ "${TARGET_BRANCH}" == "v1.48" ]; then
   ISTIO_VERSION="1.13.0"
 elif [ "${TARGET_BRANCH}" == "v1.36" ]; then
   ISTIO_VERSION="1.10.0"
-elif [ "${TARGET_BRANCH}" == "v1.24" ]; then
-  ISTIO_VERSION="1.7.0"
 fi
 
 KIND_NODE_IMAGE=""
-if [ "${ISTIO_VERSION}" == "1.7.0" ]; then
-  KIND_NODE_IMAGE="kindest/node:v1.18.20@sha256:e3dca5e16116d11363e31639640042a9b1bd2c90f85717a7fc66be34089a8169"
-elif [ "${ISTIO_VERSION}" == "1.10.0" ]; then
+if [ "${ISTIO_VERSION}" == "1.10.0" ]; then
   KIND_NODE_IMAGE="kindest/node:v1.21.10@sha256:84709f09756ba4f863769bdcabe5edafc2ada72d3c8c44d6515fc581b66b029c"
 elif [ "${ISTIO_VERSION}" == "1.13.0" ]; then
   KIND_NODE_IMAGE="kindest/node:v1.23.4@sha256:0e34f0d0fd448aa2f2819cfd74e99fe5793a6e4938b328f657c8e3f81ee0dfb9"
+else
+  KIND_NODE_IMAGE="kindest/node:v1.24.4@sha256:adfaebada924a26c2c9308edd53c6e33b3d4e453782c0063dc0028bdebaddf98"
 fi
 
 # print out our settings for debug purposes
@@ -99,26 +98,12 @@ EOF
 infomsg "Create Kind LoadBalancer via MetalLB"
 lb_addr_range="255.70-255.84"
 
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.12.1/manifests/namespace.yaml
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.12.1/manifests/metallb.yaml
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.5/config/manifests/metallb-native.yaml
 
 subnet=$(${DORP} network inspect kind --format '{{(index .IPAM.Config 0).Subnet}}')
 subnet_trimmed=$(echo "${subnet}" | sed -E 's/([0-9]+\.[0-9]+)\.[0-9]+\..*/\1/')
 first_ip="${subnet_trimmed}.$(echo "${lb_addr_range}" | cut -d '-' -f 1)"
 last_ip="${subnet_trimmed}.$(echo "${lb_addr_range}" | cut -d '-' -f 2)"
-cat <<LBCONFIGMAP | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  namespace: metallb-system
-  name: config
-data:
-  config: |
-    address-pools:
-    - name: default
-      protocol: layer2
-      addresses: ['${first_ip}-${last_ip}']
-LBCONFIGMAP
 
 if [ -n "${ISTIO_VERSION}" ]; then
   DOWNLOAD_ISTIO_VERSION_ARG="--istio-version ${ISTIO_VERSION}"
@@ -127,15 +112,33 @@ fi
 infomsg "Downloading istio"
 hack/istio/download-istio.sh ${DOWNLOAD_ISTIO_VERSION_ARG}
 
+kubectl rollout status deployment controller -n metallb-system
+
+cat <<LBCONFIGMAP | kubectl apply -f -
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  namespace: metallb-system
+  name: config
+spec:
+  addresses:
+  - ${first_ip}-${last_ip}
+LBCONFIGMAP
+
+cat <<LBCONFIGMAP | kubectl apply -f -
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  namespace: metallb-system
+  name: l2config
+spec:
+  ipAddressPools:
+  - config
+LBCONFIGMAP
+
 infomsg "Installing istio"
 # Apparently you can't set the requests to zero for the proxy so just setting them to some really low number.
-hack/istio/install-istio-via-istioctl.sh --client-exe-path "$(which kubectl)" \
-  --set "values.global.proxy.resources.requests.cpu=1m" \
-  --set "values.global.proxy.resources.requests.memory=1Mi" \
-  --set "values.global.proxy_init.resources.requests.cpu=1m" \
-  --set "values.global.proxy_init.resources.requests.memory=1Mi" \
-  --set "components.pilot.k8s.resources.requests.cpu=1m" \
-  --set "components.pilot.k8s.resources.requests.memory=1Mi"
+hack/istio/install-istio-via-istioctl.sh --reduce-resources true --client-exe-path "$(which kubectl)" -cn "cluster-default" -mid "mesh-default" -net "network-default"
   
 infomsg "Pushing the images into the cluster..."
 make -e DORP="${DORP}" -e CLUSTER_TYPE="kind" -e KIND_NAME="ci" cluster-push-kiali
@@ -150,7 +153,7 @@ infomsg "Installing kiali server via Helm"
 # Need a single dashboard set for grafana.
 helm install \
   --namespace istio-system \
-  --set auth.strategy="anonymous" \
+  --set auth.strategy="${AUTH_STRATEGY}" \
   --set deployment.logger.log_level="trace" \
   --set deployment.service_type="LoadBalancer" \
   --set deployment.image_name=kiali/kiali \
@@ -159,8 +162,18 @@ helm install \
   --set external_services.grafana.url="http://grafana.istio-system:3000" \
   --set external_services.grafana.dashboards[0].name="Istio Mesh Dashboard" \
   --set external_services.tracing.url="http://tracing.istio-system:16685/jaeger" \
+  --set health_config.rate[0].kind="service" \
+  --set health_config.rate[0].name="y-server" \
+  --set health_config.rate[0].namespace="alpha" \
+  --set health_config.rate[0].tolerance[0].code="5xx" \
+  --set health_config.rate[0].tolerance[0].degraded=2 \
+  --set health_config.rate[0].tolerance[0].failure=100 \
   kiali-server \
   helm-charts/_output/charts/kiali-server-*-SNAPSHOT.tgz
+
+# Create the citest service account whose token will be used to log into Kiali
+infomsg "Installing the test ServiceAccount with read-write permissions"
+for o in role rolebinding serviceaccount; do helm template --show-only "templates/${o}.yaml" --namespace=istio-system --set deployment.instance_name=citest --set auth.strategy=anonymous kiali-server helm-charts/_output/charts/kiali-server-*-SNAPSHOT.tgz; done | kubectl apply -f -
 
 # Unfortunately kubectl rollout status fails if the resource does not exist yet.
 for (( i=1; i<=60; i++ ))
@@ -199,3 +212,6 @@ if [ "${TIMEOUT}" == "True" ]; then
 fi
 
 infomsg "Kiali is ready."
+
+
+

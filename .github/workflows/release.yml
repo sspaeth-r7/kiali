@@ -1,9 +1,9 @@
 name: Release
 
 on:
-  # schedule:
-  #   # Every Friday at 19:00 (UTC)
-  #   - cron: '00 19 * * FRI'
+  schedule:
+  # Every Monday at 07:00 (UTC)
+  - cron: '00 7 * * MON'
   workflow_dispatch:
     inputs:
       release_type:
@@ -31,11 +31,11 @@ jobs:
     runs-on: ubuntu-20.04
     outputs:
       target_branch: ${{ github.ref_name }}
-      release_type: ${{ steps.release_type.outputs.release_type }}
-      release_version: ${{ steps.release_version.outputs.release_version }}
-      branch_version: ${{ steps.branch_version.outputs.branch_version }}
-      next_version: ${{ steps.next_version.outputs.next_version }}
-      quay_tag: ${{ steps.quay_tag.outputs.quay_tag }}
+      release_type: ${{ env.release_type }}
+      release_version: ${{ env.release_version }}
+      branch_version: ${{ env.branch_version }}
+      next_version: ${{ env.next_version }}
+      quay_tag: ${{ env.quay_tag }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -57,7 +57,7 @@ jobs:
             minor = 0
             patch = 0
         elif release_type == 'minor':
-            minor = minor + 1 
+            minor = minor + 1
             patch = 0
         elif release_type == 'patch':
             patch = patch + 1
@@ -67,7 +67,7 @@ jobs:
         cat <<-EOF > minor.py
         import datetime
 
-        base = int(datetime.datetime.strptime("24/04/2022", "%d/%m/%Y").timestamp())        
+        base = int(datetime.datetime.strptime("24/04/2022", "%d/%m/%Y").timestamp())
         now = int(datetime.datetime.now().timestamp())
 
         diff = now - base
@@ -85,20 +85,20 @@ jobs:
         if [ -z ${{ github.event.inputs.release_type }} ];
         then
           DO_RELEASE=$(python minor.py)
-          if [[ $DO_RELEASE == "0" ]]
+          if [[ $DO_RELEASE == "1" ]]
           then
-            echo "::set-output name=release_type::minor"
+            echo "release_type=minor" >> $GITHUB_ENV 
           else
-            echo "::set-output name=release_type::skip"
+            echo "release_type=skip" >> $GITHUB_ENV 
           fi
         else
-          echo "::set-output name=release_type::${{ github.event.inputs.release_type }}"
+          echo "release_type=${{ github.event.inputs.release_type }}" >> $GITHUB_ENV 
         fi
 
     - name: Determine release version
-      if: ${{ steps.release_type.outputs.release_type != 'skip' }}
+      if: ${{ env.release_type != 'skip' }}
       env:
-        RELEASE_TYPE: ${{ steps.release_type.outputs.release_type }}
+        RELEASE_TYPE: ${{ env.release_type }}
       id: release_version
       run: |
         RAW_VERSION=$(sed -rn 's/^VERSION \?= (.*)/\1/p' Makefile)
@@ -113,38 +113,38 @@ jobs:
         then
           RELEASE_VERSION=$RELEASE_VERSION
         fi
-
-        echo "::set-output name=release_version::$RELEASE_VERSION"
+        
+        echo "release_version=$RELEASE_VERSION" >> $GITHUB_ENV 
 
     - name: Determine next version
       env:
-        RELEASE_TYPE: ${{ steps.release_type.outputs.release_type }}
-        RELEASE_VERSION: ${{ steps.release_version.outputs.release_version }}
+        RELEASE_TYPE: ${{ env.release_type }}
+        RELEASE_VERSION: ${{ env.release_version }}
       id: next_version
-      if: ${{ steps.release_type.outputs.release_type != 'skip' }}
+      if: ${{ env.release_type != 'skip' }}
       run: |
         if [[ $RELEASE_TYPE == "patch" ]]
         then
             NEXT_VERSION=$(python bump.py $RELEASE_TYPE $RELEASE_VERSION)
         elif [[ $RELEASE_TYPE == "minor" ]]
-        then 
+        then
             NEXT_VERSION=$(python bump.py $RELEASE_TYPE $RELEASE_VERSION)
         fi
 
-        echo "::set-output name=next_version::$NEXT_VERSION"
+        echo "next_version=$NEXT_VERSION" >> $GITHUB_ENV        
 
     - name: Determine branch version
-      if: ${{ steps.release_type.outputs.release_type != 'skip' }}
+      if: ${{ env.release_type != 'skip' }}
       env:
-        RELEASE_VERSION: ${{ steps.release_version.outputs.release_version }}
+        RELEASE_VERSION: ${{ env.release_version }}
       id: branch_version
-      run: echo "::set-output name=branch_version::$(echo $RELEASE_VERSION | sed 's/\.[0-9]*\+$//')"
+      run: echo "branch_version=$(echo $RELEASE_VERSION | sed 's/\.[0-9]*\+$//')" >> $GITHUB_ENV
 
     - name: Determine Quay tag
-      if: ${{ steps.release_type.outputs.release_type != 'skip' }}
+      if: ${{ env.release_type != 'skip' }}
       env:
-        RELEASE_VERSION: ${{ steps.release_version.outputs.release_version }}
-        BRANCH_VERSION: ${{ steps.branch_version.outputs.branch_version }}
+        RELEASE_VERSION: ${{ env.release_version }}
+        BRANCH_VERSION: ${{ env.branch_version }}
       id: quay_tag
       run: |
         if [ -z ${{ github.event.inputs.quay_repository }} ];
@@ -153,25 +153,25 @@ jobs:
         else
           QUAY_REPO="${{ github.event.inputs.quay_repository }}"
         fi
-        
+
         QUAY_TAG="$QUAY_REPO:$RELEASE_VERSION $QUAY_REPO:$BRANCH_VERSION"
-        
-        echo "::set-output name=quay_tag::$QUAY_TAG"
-    
+
+        echo "quay_tag=$QUAY_TAG" >> $GITHUB_ENV
+
     - name: Cleanup
       run: rm bump.py minor.py
 
     - name: Log information
       run: |
-        echo "Release type: ${{ steps.release_type.outputs.release_type }}"
+        echo "Release type: ${{ env.release_type }}"
 
-        echo "Release version: ${{ steps.release_version.outputs.release_version }}"
+        echo "Release version: ${{ env.release_version }}"
 
-        echo "Next version: ${{ steps.next_version.outputs.next_version }}"
+        echo "Next version: ${{ env.next_version }}"
 
-        echo "Branch version: ${{ steps.branch_version.outputs.branch_version }}"
+        echo "Branch version: ${{ env.branch_version }}"
 
-        echo "Quay tag": ${{ steps.quay_tag.outputs.quay_tag }}
+        echo "Quay tag": ${{ env.quay_tag }}
 
   build_backend:
     name: Build backend
@@ -213,11 +213,11 @@ jobs:
     if: ${{ needs.initialize.outputs.release_type != 'skip' && ((github.event_name == 'schedule' && github.repository == 'kiali/kiali') || github.event_name != 'schedule') }}
     runs-on: ubuntu-20.04
     needs: [initialize, build_backend, build_frontend, integration_tests_backend, integration_tests_frontend]
-    env:  
+    env:
       RELEASE_VERSION: ${{ needs.initialize.outputs.release_version }}
       BRANCH_VERSION: ${{ needs.initialize.outputs.branch_version }}
       NEXT_VERSION: ${{ needs.initialize.outputs.next_version }}
-      RELEASE_BRANCH: ${{ github.event.inputs.release_branch || github.ref_name }} 
+      RELEASE_BRANCH: ${{ github.event.inputs.release_branch || github.ref_name }}
       QUAY_TAG: ${{ needs.initialize.outputs.quay_tag }}
     steps:
     - name: Checkout code
@@ -231,36 +231,30 @@ jobs:
         sed -i -r "s/^VERSION \?= (.*)/VERSION \?= $RELEASE_VERSION/" Makefile
 
         # UI version
-        jq -r '.version |= "$(RELEASE_VERSION)"' frontend/package.json > frontend/package.json.tmp
+        jq -r '.version |= "${RELEASE_VERSION:1}"' frontend/package.json > frontend/package.json.tmp
         mv frontend/package.json.tmp frontend/package.json
 
 
     - name: Set up Go
-      uses: actions/setup-go@v2
+      uses: actions/setup-go@v3
       with:
-        go-version: 1.17.7
-
-    - name: Cache Go deps
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+        go-version-file: go.mod
+        # The builtin cache feature ensures that installing golangci-lint
+        # is consistently fast.
+        cache: true
+        cache-dependency-path: go.sum
 
     - name: Download frontend build
       uses: actions/download-artifact@v3
       with:
         name: build
         path: frontend/build
-    
+
     - name: Build and push image
       run: |
         docker login -u ${{ secrets.QUAY_USER }} -p ${{ secrets.QUAY_PASSWORD }} quay.io
 
-        make -e DOCKER_CLI_EXPERIMENTAL=enabled build-linux-multi-arch container-multi-arch-push-kiali-quay
+        make -e DOCKER_CLI_EXPERIMENTAL=enabled build-linux-multi-arch container-multi-arch-all-push-kiali-quay
 
     - name: Configure git
       run: |
@@ -293,7 +287,7 @@ jobs:
       run: |
         sed -i -r "s/^VERSION \?= (.*)/VERSION \?= $NEXT_VERSION-SNAPSHOT/" Makefile
 
-        jq -r ".version |= \"$NEXT_VERSION\"" frontend/package.json > frontend/package.json.tmp
+        jq -r ".version |= \"${NEXT_VERSION:1}\"" frontend/package.json > frontend/package.json.tmp
         mv frontend/package.json.tmp frontend/package.json
 
         git add Makefile frontend/package.json

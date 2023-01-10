@@ -4,11 +4,15 @@ import {
   DestinationRule,
   EnvoyFilter,
   Gateway,
+  K8sGateway,
+  K8sHTTPRoute,
   ObjectValidation,
   PeerAuthentication,
   RequestAuthentication,
   ServiceEntry,
   Sidecar,
+  WasmPlugin,
+  Telemetry,
   Validations,
   VirtualService,
   WorkloadEntry,
@@ -23,11 +27,15 @@ export interface IstioConfigItem {
   creationTimestamp?: string;
   resourceVersion?: string;
   gateway?: Gateway;
+  k8sGateway?: K8sGateway;
+  k8sHTTPRoute?: K8sHTTPRoute;
   virtualService?: VirtualService;
   destinationRule?: DestinationRule;
   serviceEntry?: ServiceEntry;
   authorizationPolicy?: AuthorizationPolicy;
   sidecar?: Sidecar;
+  wasmPlugin?: WasmPlugin;
+  telemetry?: Telemetry;
   peerAuthentication?: PeerAuthentication;
   requestAuthentication?: RequestAuthentication;
   workloadEntry?: WorkloadEntry;
@@ -36,9 +44,13 @@ export interface IstioConfigItem {
   validation?: ObjectValidation;
 }
 
+export declare type IstioConfigsMap = { [key: string]: IstioConfigList };
+
 export interface IstioConfigList {
   namespace: Namespace;
   gateways: Gateway[];
+  k8sGateways: K8sGateway[];
+  k8sHTTPRoutes: K8sHTTPRoute[];
   virtualServices: VirtualService[];
   destinationRules: DestinationRule[];
   serviceEntries: ServiceEntry[];
@@ -47,6 +59,8 @@ export interface IstioConfigList {
   envoyFilters: EnvoyFilter[];
   authorizationPolicies: AuthorizationPolicy[];
   sidecars: Sidecar[];
+  wasmPlugins: WasmPlugin[];
+  telemetries: Telemetry[];
   peerAuthentications: PeerAuthentication[];
   requestAuthentications: RequestAuthentication[];
   permissions: { [key: string]: ResourcePermissions };
@@ -56,6 +70,8 @@ export interface IstioConfigList {
 export const dicIstioType = {
   Sidecar: 'sidecars',
   Gateway: 'gateways',
+  K8sGateway: 'k8sgateways',
+  K8sHTTPRoute: 'k8shttproutes',
   VirtualService: 'virtualservices',
   DestinationRule: 'destinationrules',
   ServiceEntry: 'serviceentries',
@@ -65,8 +81,12 @@ export const dicIstioType = {
   WorkloadEntry: 'workloadentries',
   WorkloadGroup: 'workloadgroups',
   EnvoyFilter: 'envoyfilters',
+  WasmPlugin: 'wasmPlugins',
+  Telemetry: 'telemetries',
 
   gateways: 'Gateway',
+  k8sgateways: 'K8sGateway',
+  k8shttproutes: 'K8sHTTPRoute',
   virtualservices: 'VirtualService',
   destinationrules: 'DestinationRule',
   serviceentries: 'ServiceEntry',
@@ -77,13 +97,19 @@ export const dicIstioType = {
   workloadentries: 'WorkloadEntry',
   workloadgroups: 'WorkloadGroup',
   envoyfilters: 'EnvoyFilter',
+  telemetries: 'Telemetry',
+  wasmplugins: 'WasmPlugin',
 
   gateway: 'Gateway',
+  k8sgateway: 'K8sGateway',
+  k8shttproute: 'K8sHTTPRoute',
   virtualservice: 'VirtualService',
   destinationrule: 'DestinationRule',
   serviceentry: 'ServiceEntry',
   authorizationpolicy: 'AuthorizationPolicy',
   sidecar: 'Sidecar',
+  wasmplugin: 'WasmPlugin',
+  telemetry: 'Telemetry',
   peerauthentication: 'PeerAuthentication',
   requestauthentication: 'RequestAuthentication',
   workloadentry: 'WorkloadEntry',
@@ -115,6 +141,8 @@ export const filterByName = (unfiltered: IstioConfigList, names: string[]): Isti
   return {
     namespace: unfiltered.namespace,
     gateways: unfiltered.gateways.filter(gw => includeName(gw.metadata.name, names)),
+    k8sGateways: unfiltered.k8sGateways.filter(gw => includeName(gw.metadata.name, names)),
+    k8sHTTPRoutes: unfiltered.k8sHTTPRoutes.filter(route => includeName(route.metadata.name, names)),
     virtualServices: unfiltered.virtualServices.filter(vs => includeName(vs.metadata.name, names)),
     destinationRules: unfiltered.destinationRules.filter(dr => includeName(dr.metadata.name, names)),
     serviceEntries: unfiltered.serviceEntries.filter(se => includeName(se.metadata.name, names)),
@@ -125,6 +153,8 @@ export const filterByName = (unfiltered: IstioConfigList, names: string[]): Isti
     workloadEntries: unfiltered.workloadEntries.filter(we => includeName(we.metadata.name, names)),
     workloadGroups: unfiltered.workloadGroups.filter(wg => includeName(wg.metadata.name, names)),
     envoyFilters: unfiltered.envoyFilters.filter(ef => includeName(ef.metadata.name, names)),
+    wasmPlugins: unfiltered.wasmPlugins.filter(wp => includeName(wp.metadata.name, names)),
+    telemetries: unfiltered.telemetries.filter(tm => includeName(tm.metadata.name, names)),
     validations: unfiltered.validations,
     permissions: unfiltered.permissions
   };
@@ -180,9 +210,13 @@ export const toIstioItems = (istioConfigList: IstioConfigList): IstioConfigItem[
     const entryName = typeNameProto.charAt(0).toLowerCase() + typeNameProto.slice(1);
 
     let entries = istioConfigList[field];
-    if (!(entries instanceof Array)) {
+    if (entries && !(entries instanceof Array)) {
       // VirtualServices, DestinationRules
       entries = entries.items;
+    }
+
+    if (!entries) {
+      return
     }
 
     entries.forEach(entry => {
@@ -290,6 +324,42 @@ export const gwToIstioItems = (gws: Gateway[], vss: VirtualService[], validation
   return istioItems;
 };
 
+export const k8sGwToIstioItems = (gws: K8sGateway[], k8srs: K8sHTTPRoute[]): IstioConfigItem[] => {
+  const istioItems: IstioConfigItem[] = [];
+  const k8sGateways = new Set();
+
+  const typeNameProto = dicIstioType['k8sgateways']; // ex. serviceEntries -> ServiceEntry
+  const typeName = typeNameProto.toLowerCase(); // ex. ServiceEntry -> serviceentry
+  const entryName = typeNameProto.charAt(0).toLowerCase() + typeNameProto.slice(1);
+
+  k8srs.forEach(k8sr => {
+    k8sr.spec.parentRefs?.forEach(parentRef => {
+      if (!parentRef.namespace) {
+        k8sGateways.add(k8sr.metadata.namespace + '/' + parentRef.name);
+      } else {
+        k8sGateways.add(parentRef.namespace + '/' + parentRef.name);
+      }
+    });
+  });
+
+  gws.forEach(gw => {
+    if (k8sGateways.has(gw.metadata.namespace + '/' + gw.metadata.name)) {
+      const item = {
+        namespace: gw.metadata.namespace || '',
+        type: typeName,
+        name: gw.metadata.name,
+        creationTimestamp: gw.metadata.creationTimestamp,
+        resourceVersion: gw.metadata.resourceVersion,
+        // @TODO Validations
+        validation: undefined
+      };
+      item[entryName] = gw;
+      istioItems.push(item);
+    }
+  });
+  return istioItems;
+};
+
 export const seToIstioItems = (see: ServiceEntry[], validations: Validations): IstioConfigItem[] => {
   const istioItems: IstioConfigItem[] = [];
   const hasValidations = (vKey: string) => validations.serviceentry && validations.serviceentry[vKey];
@@ -309,6 +379,29 @@ export const seToIstioItems = (see: ServiceEntry[], validations: Validations): I
       validation: hasValidations(vKey) ? validations.serviceentry[vKey] : undefined
     };
     item[entryName] = se;
+    istioItems.push(item);
+  });
+  return istioItems;
+};
+
+export const k8sHTTPRouteToIstioItems = (routes: K8sHTTPRoute[]): IstioConfigItem[] => {
+  const istioItems: IstioConfigItem[] = [];
+
+  const typeNameProto = dicIstioType['k8shttproutes']; // ex. serviceEntries -> ServiceEntry
+  const typeName = typeNameProto.toLowerCase(); // ex. ServiceEntry -> serviceentry
+  const entryName = typeNameProto.charAt(0).toLowerCase() + typeNameProto.slice(1);
+
+  routes.forEach(route => {
+    const item = {
+      namespace: route.metadata.namespace || '',
+      type: typeName,
+      name: route.metadata.name,
+      creationTimestamp: route.metadata.creationTimestamp,
+      resourceVersion: route.metadata.resourceVersion,
+      // @TODO Validations
+      validation: undefined
+    };
+    item[entryName] = route;
     istioItems.push(item);
   });
   return istioItems;

@@ -9,7 +9,6 @@ import * as AlertUtils from '../../utils/AlertUtils';
 import IstioMetricsContainer from '../../components/Metrics/IstioMetrics';
 import { MetricsObjectTypes } from '../../types/Metrics';
 import CustomMetricsContainer from '../../components/Metrics/CustomMetrics';
-import { RenderHeader } from '../../components/Nav/Page';
 import { serverConfig } from '../../config/ServerConfig';
 import WorkloadPodLogs from './WorkloadPodLogs';
 import { DurationInSeconds, TimeInMilliseconds } from '../../types/Common';
@@ -24,24 +23,31 @@ import TimeControl from '../../components/Time/TimeControl';
 import EnvoyDetailsContainer from 'components/Envoy/EnvoyDetails';
 import { StatusState } from '../../types/StatusState';
 import { WorkloadHealth } from 'types/Health';
+import RenderHeaderContainer from "../../components/Nav/Page/RenderHeader";
+import ErrorSection from "../../components/ErrorSection/ErrorSection";
+import {ErrorMsg} from "../../types/ErrorMsg";
+import connectRefresh from "../../components/Refresh/connectRefresh";
+
 
 type WorkloadDetailsState = {
   workload?: Workload;
   health?: WorkloadHealth;
   currentTab: string;
+  error?: ErrorMsg;
 };
 
 type ReduxProps = {
   duration: DurationInSeconds;
   jaegerInfo?: JaegerInfo;
-  lastRefreshAt: TimeInMilliseconds;
   statusState: StatusState;
 };
 
-type WorkloadDetailsPageProps = ReduxProps & RouteComponentProps<WorkloadId>;
+type WorkloadDetailsPageProps = ReduxProps & RouteComponentProps<WorkloadId> & {
+  lastRefreshAt: TimeInMilliseconds;
+};
 
-const tabName = 'tab';
-const defaultTab = 'info';
+export const tabName = 'tab';
+export const defaultTab = 'info';
 
 const paramToTab: { [key: string]: number } = {
   info: 0,
@@ -73,21 +79,27 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
       this.props.duration !== prevProps.duration
     ) {
       if (currentTab === 'info' || currentTab === 'logs' || currentTab === 'envoy') {
-        this.fetchWorkload();
+        this.fetchWorkload().then(() => {
+            if (currentTab !== this.state.currentTab) {
+              this.setState({ currentTab: currentTab });
+            }
+        });
+      } else {
+        if (currentTab !== this.state.currentTab) {
+          this.setState({ currentTab: currentTab });
+        }
       }
-      if (currentTab !== this.state.currentTab) {
-        this.setState({ currentTab: currentTab });
-      }
+
     }
   }
 
-  private fetchWorkload = () => {
+  private fetchWorkload = async () => {
     const params: { [key: string]: string } = {
       validate: 'true',
       rateInterval: String(this.props.duration) + 's',
       health: 'true'
     };
-    API.getWorkload(this.props.match.params.namespace, this.props.match.params.workload, params)
+    await API.getWorkload(this.props.match.params.namespace, this.props.match.params.workload, params)
       .then(details => {
         this.setState({
           workload: details.data,
@@ -99,7 +111,11 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
           )
         });
       })
-      .catch(error => AlertUtils.addError('Could not fetch Workload.', error));
+      .catch(error => {
+        AlertUtils.addError('Could not fetch Workload.', error);
+        const msg : ErrorMsg = {title: 'No Workload is selected', description: this.props.match.params.workload +" is not found in the mesh"};
+        this.setState({error: msg});
+      });
   };
 
   private staticTabs() {
@@ -124,6 +140,7 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
         <TrafficDetails
           itemName={this.props.match.params.workload}
           itemType={MetricsObjectTypes.WORKLOAD}
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
         />
       </Tab>
@@ -135,6 +152,7 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
         <Tab title="Logs" eventKey={2} key={'Logs'} data-test={"workload-details-logs-tab"}>
           {hasPods ? (
             <WorkloadPodLogs
+              lastRefreshAt={this.props.lastRefreshAt}
               namespace={this.props.match.params.namespace}
               workload={this.props.match.params.workload}
               pods={this.state.workload!.pods}
@@ -155,6 +173,8 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
     const inTab = (
       <Tab title="Inbound Metrics" eventKey={3} key={'Inbound Metrics'}>
         <IstioMetricsContainer
+          data-test="inbound-metrics-component"
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
           object={this.props.match.params.workload}
           objectType={MetricsObjectTypes.WORKLOAD}
@@ -167,6 +187,8 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
     const outTab = (
       <Tab title="Outbound Metrics" eventKey={4} key={'Outbound Metrics'}>
         <IstioMetricsContainer
+          data-test="outbound-metrics-component"
+          lastRefreshAt={this.props.lastRefreshAt}
           namespace={this.props.match.params.namespace}
           object={this.props.match.params.workload}
           objectType={MetricsObjectTypes.WORKLOAD}
@@ -180,6 +202,7 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
       tabsArray.push(
         <Tab eventKey={5} title="Traces" key="Traces">
           <TracesComponent
+            lastRefreshAt={this.props.lastRefreshAt}
             namespace={this.props.match.params.namespace}
             target={this.props.match.params.workload}
             targetKind={'workload'}
@@ -191,7 +214,10 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
       const envoyTab = (
         <Tab title="Envoy" eventKey={10} key={'Envoy'}>
           {this.state.workload && (
-            <EnvoyDetailsContainer namespace={this.props.match.params.namespace} workload={this.state.workload} />
+            <EnvoyDetailsContainer
+              lastRefreshAt={this.props.lastRefreshAt}
+              namespace={this.props.match.params.namespace}
+              workload={this.state.workload} />
           )}
         </Tab>
       );
@@ -238,6 +264,7 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
               const tab = (
                 <Tab key={dashboard.template} title={dashboard.title} eventKey={tabKey}>
                   <CustomMetricsContainer
+                    lastRefreshAt={this.props.lastRefreshAt}
                     namespace={this.props.match.params.namespace}
                     app={app}
                     version={version}
@@ -264,6 +291,7 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
   }
 
   render() {
+
     // set default to true: all dynamic tabs (unlisted below) are for runtimes dashboards, which uses custom time
     let useCustomTime = true;
     switch (this.state.currentTab) {
@@ -289,11 +317,14 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
       ) : undefined;
     return (
       <>
-        <RenderHeader
+        <RenderHeaderContainer
           location={this.props.location}
           rightToolbar={<TimeControl customDuration={useCustomTime} />}
           actionsToolbar={actionsToolbar}
         />
+        {this.state.error && (
+          <ErrorSection error={this.state.error} />
+          )}
         {this.state.workload && (
           <ParameterizedTabs
             id="basic-tabs"
@@ -318,10 +349,9 @@ class WorkloadDetails extends React.Component<WorkloadDetailsPageProps, Workload
 const mapStateToProps = (state: KialiAppState) => ({
   duration: durationSelector(state),
   jaegerInfo: state.jaegerState.info,
-  lastRefreshAt: state.globalState.lastRefreshAt,
-  statusState: state.statusState
+  statusState: state.statusState,
 });
 
-const WorkloadDetailsContainer = connect(mapStateToProps)(WorkloadDetails);
+const WorkloadDetailsContainer = connectRefresh(connect(mapStateToProps)(WorkloadDetails));
 
 export default WorkloadDetailsContainer;

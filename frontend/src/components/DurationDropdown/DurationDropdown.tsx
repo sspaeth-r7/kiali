@@ -4,14 +4,15 @@ import * as React from 'react';
 import { DurationInSeconds } from '../../types/Common';
 import { KialiAppState } from '../../store/Store';
 import { durationSelector } from '../../store/Selectors';
-import { ThunkDispatch } from 'redux-thunk';
-import { KialiAppAction } from '../../actions/KialiAppAction';
+import { KialiDispatch } from 'types/Redux';
 import { bindActionCreators } from 'redux';
 import { UserSettingsActions } from '../../actions/UserSettingsActions';
 import { connect } from 'react-redux';
 import { HistoryManager, URLParam } from '../../app/History';
 import history from '../../app/History';
 import { TooltipPosition } from '@patternfly/react-core';
+import { isKioskMode } from "../../utils/SearchParamUtils";
+import { kioskDurationAction } from "../Kiosk/KioskActions";
 
 type ReduxProps = {
   duration: DurationInSeconds;
@@ -23,12 +24,14 @@ type DurationDropdownProps = ReduxProps & {
   disabled?: boolean;
   tooltip?: string;
   tooltipPosition?: TooltipPosition;
+  menuAppendTo?: HTMLElement | (() => HTMLElement) | 'parent' | 'inline';
   nameDropdown?: string;
   suffix?: string;
   prefix?: string;
 };
 
 export class DurationDropdown extends React.Component<DurationDropdownProps> {
+
   render() {
     const durations = humanDurations(serverConfig, this.props.prefix, this.props.suffix);
 
@@ -36,19 +39,29 @@ export class DurationDropdown extends React.Component<DurationDropdownProps> {
       <ToolbarDropdown
         id={this.props.id}
         disabled={this.props.disabled}
-        handleSelect={key => this.props.setDuration(Number(key))}
+        handleSelect={key => this.updateDurationInterval(Number(key))}
         value={String(this.props.duration)}
         label={durations[this.props.duration]}
         options={durations}
         tooltip={this.props.tooltip}
         tooltipPosition={this.props.tooltipPosition}
         nameDropdown={this.props.nameDropdown}
+        menuAppendTo={this.props.menuAppendTo}
       />
     );
   }
+
+  private updateDurationInterval = (duration: number) => {
+    this.props.setDuration(duration); // notify redux of the change
+
+    if (isKioskMode() ) {
+      kioskDurationAction(duration);
+    }
+  };
+
 }
 
-export const withDurations = DurationDropdownComponent => {
+const withDurations = DurationDropdownComponent => {
   return (props: DurationDropdownProps) => {
     return (
       <DurationDropdownComponent durations={humanDurations(serverConfig, props.prefix, props.suffix)} {...props} />
@@ -56,7 +69,7 @@ export const withDurations = DurationDropdownComponent => {
   };
 };
 
-export const withURLAwareness = DurationDropdownComponent => {
+const withURLAwareness = DurationDropdownComponent => {
   return class extends React.Component<DurationDropdownProps> {
     constructor(props: DurationDropdownProps) {
       super(props);
@@ -82,13 +95,14 @@ const mapStateToProps = (state: KialiAppState) => ({
   duration: durationSelector(state)
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => {
+const mapDispatchToProps = (dispatch: KialiDispatch) => {
   return {
     setDuration: bindActionCreators(UserSettingsActions.setDuration, dispatch)
   };
 };
+export const DurationDropdownComponent = withDurations(DurationDropdown);
 
 export const DurationDropdownContainer = connect(
   mapStateToProps,
   mapDispatchToProps
-)(withURLAwareness(withDurations(DurationDropdown)));
+)(withURLAwareness(DurationDropdownComponent));

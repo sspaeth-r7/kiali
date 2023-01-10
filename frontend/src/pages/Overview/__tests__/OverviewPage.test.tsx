@@ -86,8 +86,8 @@ describe('Overview page', () => {
     // Ignore other calls
     mockAPIToPromise('getNamespaceMetrics', null, false);
     mockAPIToPromise('getNamespaceTls', null, false);
-    mockAPIToPromise('getNamespaceValidations', null, false);
-    mockAPIToPromise('getIstioConfig', null, false);
+    mockAPIToPromise('getConfigValidations', null, false);
+    mockAPIToPromise('getAllIstioConfigs', null, false);
     mockAPIToPromise('getIstioPermissions', {}, false);
   });
 
@@ -101,7 +101,7 @@ describe('Overview page', () => {
 
   it('renders initial layout', () => {
     const wrapper = shallow(
-      <OverviewPage meshStatus={MTLSStatuses.NOT_ENABLED} navCollapse={false} duration={600} refreshInterval={10000} />
+      <OverviewPage meshStatus={MTLSStatuses.NOT_ENABLED} navCollapse={false} duration={600} refreshInterval={10000} kiosk={''} minTLS={''}/>
     );
     expect(shallowToJson(wrapper)).toMatchSnapshot();
   });

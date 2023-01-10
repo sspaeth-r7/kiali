@@ -4,6 +4,7 @@ import (
 	networking_v1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 	core_v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	k8s_networking_v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/kubernetes"
@@ -30,6 +31,8 @@ type ServiceOverview struct {
 	AdditionalDetailSample *AdditionalItem `json:"additionalDetailSample"`
 	// Annotations of the service
 	HealthAnnotations map[string]string `json:"healthAnnotations"`
+	// Names and Ports of Service
+	Ports map[string]int `json:"ports"`
 	// Labels for Service
 	Labels map[string]string `json:"labels"`
 	// Selector for Service
@@ -60,17 +63,20 @@ type ServiceDefinitionList struct {
 }
 
 type ServiceDetails struct {
-	Service          Service                              `json:"service"`
-	IstioSidecar     bool                                 `json:"istioSidecar"`
-	Endpoints        Endpoints                            `json:"endpoints"`
-	VirtualServices  []networking_v1beta1.VirtualService  `json:"virtualServices"`
-	DestinationRules []networking_v1beta1.DestinationRule `json:"destinationRules"`
-	ServiceEntries   []networking_v1beta1.ServiceEntry    `json:"serviceEntries"`
-	IstioPermissions ResourcePermissions                  `json:"istioPermissions"`
-	Workloads        WorkloadOverviews                    `json:"workloads"`
-	Health           ServiceHealth                        `json:"health"`
-	Validations      IstioValidations                     `json:"validations"`
-	NamespaceMTLS    MTLSStatus                           `json:"namespaceMTLS"`
+	Service          Service                               `json:"service"`
+	IstioSidecar     bool                                  `json:"istioSidecar"`
+	Endpoints        Endpoints                             `json:"endpoints"`
+	VirtualServices  []*networking_v1beta1.VirtualService  `json:"virtualServices"`
+	DestinationRules []*networking_v1beta1.DestinationRule `json:"destinationRules"`
+	K8sHTTPRoutes    []*k8s_networking_v1alpha2.HTTPRoute  `json:"k8sHTTPRoutes"`
+	ServiceEntries   []*networking_v1beta1.ServiceEntry    `json:"serviceEntries"`
+	IstioPermissions ResourcePermissions                   `json:"istioPermissions"`
+	Workloads        WorkloadOverviews                     `json:"workloads"`
+	// Services with same app labels (different versions or a single version)
+	SubServices   []*ServiceOverview `json:"subServices"`
+	Health        ServiceHealth      `json:"health"`
+	Validations   IstioValidations   `json:"validations"`
+	NamespaceMTLS MTLSStatus         `json:"namespaceMTLS"`
 }
 
 type Services []*Service

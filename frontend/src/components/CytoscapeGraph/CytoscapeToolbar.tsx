@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as Cy from 'cytoscape';
-import { Button, Tooltip, TooltipPosition } from '@patternfly/react-core';
+import { Button, ButtonVariant, Tooltip, TooltipPosition } from '@patternfly/react-core';
 import {
   LongArrowAltRightIcon,
   ExpandArrowsAltIcon,
@@ -12,12 +12,11 @@ import {
 import { style } from 'typestyle';
 import { connect } from 'react-redux';
 import { bindActionCreators } from 'redux';
-import { ThunkDispatch } from 'redux-thunk';
+import { KialiDispatch } from 'types/Redux';
 import { KialiAppState } from '../../store/Store';
 import { PFColors } from '../Pf/PfColors';
 import * as CytoscapeGraphUtils from './CytoscapeGraphUtils';
 import { EdgeMode, Layout } from '../../types/Graph';
-import { KialiAppAction } from '../../actions/KialiAppAction';
 import { GraphActions } from '../../actions/GraphActions';
 import { HistoryManager, URLParam } from '../../app/History';
 import * as LayoutDictionary from './graphs/LayoutDictionary';
@@ -113,7 +112,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
               isActive={this.state.allowGrab}
               onClick={() => this.toggleDrag()}
               style={buttonStyle}
-              variant="plain"
+              variant={ButtonVariant.plain}
             >
               <PficonDragdropIcon className={this.state.allowGrab ? activeButtonStyle : undefined} />
             </Button>
@@ -126,7 +125,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
               aria-label="Zoom to Fit"
               onClick={() => this.fit()}
               style={buttonStyle}
-              variant="plain"
+              variant={ButtonVariant.plain}
             >
               <ExpandArrowsAltIcon />
             </Button>
@@ -142,7 +141,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                 this.handleEdgeModeClick(EdgeMode.UNHEALTHY);
               }}
               style={buttonStyle}
-              variant="plain"
+              variant={ButtonVariant.plain}
             >
               <LongArrowAltRightIcon
                 className={this.props.edgeMode === EdgeMode.UNHEALTHY ? activeButtonStyle : undefined}
@@ -160,7 +159,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                 this.handleEdgeModeClick(EdgeMode.NONE);
               }}
               style={buttonStyle}
-              variant="plain"
+              variant={ButtonVariant.plain}
             >
               <LongArrowAltRightIcon
                 className={this.props.edgeMode === EdgeMode.NONE ? activeButtonStyle : undefined}
@@ -180,7 +179,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                 this.setLayout(KialiDagreGraph.getLayout());
               }}
               style={buttonStyle}
-              variant="plain"
+              variant={ButtonVariant.plain}
             >
               <TopologyIcon
                 className={this.props.layout.name === KialiDagreGraph.getLayout().name ? activeButtonStyle : undefined}
@@ -201,7 +200,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                   this.setLayout(KialiGridGraph.getLayout());
                 }}
                 style={buttonStyle}
-                variant="plain"
+                variant={ButtonVariant.plain}
               >
                 <TopologyIcon
                   className={this.props.layout.name === KialiGridGraph.getLayout().name ? activeButtonStyle : undefined}
@@ -222,7 +221,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                 this.setLayout(KialiConcentricGraph.getLayout());
               }}
               style={buttonStyle}
-              variant="plain"
+              variant={ButtonVariant.plain}
             >
               <TopologyIcon
                 className={
@@ -244,7 +243,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                 this.setLayout(KialiBreadthFirstGraph.getLayout());
               }}
               style={buttonStyle}
-              variant="plain"
+              variant={ButtonVariant.plain}
             >
               <TopologyIcon
                 className={
@@ -270,7 +269,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                   this.setNamespaceLayout(KialiDagreGraph.getLayout());
                 }}
                 style={buttonStyle}
-                variant="plain"
+                variant={ButtonVariant.plain}
               >
                 <TenantIcon
                   className={
@@ -297,7 +296,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                   this.setNamespaceLayout(KialiBreadthFirstGraph.getLayout());
                 }}
                 style={buttonStyle}
-                variant="plain"
+                variant={ButtonVariant.plain}
               >
                 <TenantIcon
                   className={
@@ -320,7 +319,7 @@ export class CytoscapeToolbar extends React.PureComponent<CytoscapeToolbarProps,
                 isActive={this.props.showLegend}
                 onClick={this.props.toggleLegend}
                 style={buttonStyle}
-                variant="plain"
+                variant={ButtonVariant.plain}
               >
                 <MapIcon className={this.props.showLegend ? activeButtonStyle : undefined} size="sm" />
               </Button>
@@ -379,7 +378,7 @@ const mapStateToProps = (state: KialiAppState) => ({
   showLegend: state.graph.toolbarState.showLegend
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
   setEdgeMode: bindActionCreators(GraphActions.setEdgeMode, dispatch),
   setLayout: bindActionCreators(GraphActions.setLayout, dispatch),
   setNamespaceLayout: bindActionCreators(GraphActions.setNamespaceLayout, dispatch),

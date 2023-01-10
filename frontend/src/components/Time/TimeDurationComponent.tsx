@@ -5,11 +5,10 @@ import RefreshContainer from 'components/Refresh/Refresh';
 import { KialiAppState } from 'store/Store';
 import { durationSelector, replayActiveSelector } from 'store/Selectors';
 import { DurationInSeconds } from 'types/Common';
-import { Tooltip, TooltipPosition, Button } from '@patternfly/react-core';
+import { Tooltip, TooltipPosition, Button, ButtonVariant } from '@patternfly/react-core';
 import { KialiIcon, defaultIconStyle } from 'config/KialiIcon';
 import { UserSettingsActions } from 'actions/UserSettingsActions';
-import { ThunkDispatch } from 'redux-thunk';
-import { KialiAppAction } from 'actions/KialiAppAction';
+import { KialiDispatch } from 'types/Redux';
 import { bindActionCreators } from 'redux';
 
 type ReduxProps = {
@@ -23,8 +22,6 @@ type TimeControlsProps = ReduxProps & {
   disabled: boolean;
   id: string;
   supportsReplay?: boolean;
-
-  handleRefresh?: () => void;
 };
 
 export class TimeDurationComponent extends React.PureComponent<TimeControlsProps> {
@@ -36,7 +33,12 @@ export class TimeDurationComponent extends React.PureComponent<TimeControlsProps
       <span>
         {this.props.supportsReplay && !this.props.replayActive && (
           <Tooltip key={'time_range_replay'} position={TooltipPosition.left} content="Replay...">
-            <Button data-test="graph-replay-button" variant="link" style={{ padding: '1px 6px 0 0' }} onClick={this.onToggleReplay}>
+            <Button
+              data-test="graph-replay-button"
+              variant={ButtonVariant.link}
+              style={{ padding: '1px 6px 0 0' }}
+              onClick={this.onToggleReplay}
+            >
               <KialiIcon.History className={defaultIconStyle} />
             </Button>
           </Tooltip>
@@ -54,12 +56,16 @@ export class TimeDurationComponent extends React.PureComponent<TimeControlsProps
             id="time_range_refresh"
             disabled={this.props.disabled}
             hideLabel={true}
-            handleRefresh={this.props.handleRefresh}
             manageURL={true}
           />
         )}
         {this.props.supportsReplay && this.props.replayActive && (
-          <Button data-test="graph-replay-close-button" variant="link" style={{ margin: '1px 0 0 5px' }} onClick={this.onToggleReplay}>
+          <Button
+            data-test="graph-replay-close-button"
+            variant={ButtonVariant.link}
+            style={{ margin: '1px 0 0 5px' }}
+            onClick={this.onToggleReplay}
+          >
             <span>
               <KialiIcon.Close className={defaultIconStyle} />
               {`  Close Replay`}
@@ -80,7 +86,7 @@ const mapStateToProps = (state: KialiAppState) => ({
   replayActive: replayActiveSelector(state)
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
   toggleReplayActive: bindActionCreators(UserSettingsActions.toggleReplayActive, dispatch)
 });
 

@@ -7,6 +7,7 @@ import (
 
 	networking_v1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 	"k8s.io/apimachinery/pkg/labels"
+	k8s_networking_v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	"github.com/kiali/kiali/business"
 	"github.com/kiali/kiali/config"
@@ -80,7 +81,7 @@ NODES:
 		switch {
 		case n.NodeType == graph.NodeTypeService:
 			for _, destinationRule := range istioCfg.DestinationRules {
-				if models.HasDRCircuitBreaker(&destinationRule, namespace, n.Service, "") {
+				if models.HasDRCircuitBreaker(destinationRule, namespace, n.Service, "") {
 					n.Metadata[graph.HasCB] = true
 					continue NODES
 				}
@@ -89,7 +90,7 @@ NODES:
 			if destServices, ok := n.Metadata[graph.DestServices]; ok {
 				for _, ds := range destServices.(graph.DestServicesMetadata) {
 					for _, destinationRule := range istioCfg.DestinationRules {
-						if models.HasDRCircuitBreaker(&destinationRule, ds.Namespace, ds.Name, "") {
+						if models.HasDRCircuitBreaker(destinationRule, ds.Namespace, ds.Name, "") {
 							n.Metadata[graph.HasCB] = true
 							continue NODES
 						}
@@ -100,7 +101,7 @@ NODES:
 			if destServices, ok := n.Metadata[graph.DestServices]; ok {
 				for _, ds := range destServices.(graph.DestServicesMetadata) {
 					for _, destinationRule := range istioCfg.DestinationRules {
-						if models.HasDRCircuitBreaker(&destinationRule, ds.Namespace, ds.Name, n.Version) {
+						if models.HasDRCircuitBreaker(destinationRule, ds.Namespace, ds.Name, n.Version) {
 							n.Metadata[graph.HasCB] = true
 							continue NODES
 						}
@@ -120,7 +121,7 @@ NODES:
 			continue
 		}
 		for _, virtualService := range istioCfg.VirtualServices {
-			if models.IsVSValidHost(&virtualService, n.Namespace, n.Service) {
+			if models.IsVSValidHost(virtualService, n.Namespace, n.Service) {
 				var vsMetadata graph.VirtualServicesMetadata
 				var vsOk bool
 				if vsMetadata, vsOk = n.Metadata[graph.HasVS].(graph.VirtualServicesMetadata); !vsOk {
@@ -132,27 +133,27 @@ NODES:
 					vsMetadata[virtualService.Name] = virtualService.Spec.Hosts
 				}
 
-				if models.HasVSRequestRouting(&virtualService) {
+				if models.HasVSRequestRouting(virtualService) {
 					n.Metadata[graph.HasRequestRouting] = true
 				}
 
-				if models.HasVSRequestTimeout(&virtualService) {
+				if models.HasVSRequestTimeout(virtualService) {
 					n.Metadata[graph.HasRequestTimeout] = true
 				}
 
-				if models.HasVSFaultInjection(&virtualService) {
+				if models.HasVSFaultInjection(virtualService) {
 					n.Metadata[graph.HasFaultInjection] = true
 				}
 
-				if models.HasVSTrafficShifting(&virtualService) {
+				if models.HasVSTrafficShifting(virtualService) {
 					n.Metadata[graph.HasTrafficShifting] = true
 				}
 
-				if models.HasVSTCPTrafficShifting(&virtualService) {
+				if models.HasVSTCPTrafficShifting(virtualService) {
 					n.Metadata[graph.HasTCPTrafficShifting] = true
 				}
 
-				if models.HasVSMirroring(&virtualService) {
+				if models.HasVSMirroring(virtualService) {
 					n.Metadata[graph.HasMirroring] = true
 				}
 
@@ -213,7 +214,7 @@ func addLabels(trafficMap graph.TrafficMap, globalInfo *graph.AppenderGlobalInfo
 	}
 }
 
-func decorateMatchingGateways(gwCrd networking_v1beta1.Gateway, gatewayNodeMapping map[*models.WorkloadListItem][]*graph.Node, nodeMetadataKey graph.MetadataKey) {
+func decorateMatchingGateways(gwCrd *networking_v1beta1.Gateway, gatewayNodeMapping map[*models.WorkloadListItem][]*graph.Node, nodeMetadataKey graph.MetadataKey) {
 	gwSelector := labels.Set(gwCrd.Spec.Selector).AsSelector()
 	for gw, nodes := range gatewayNodeMapping {
 		if gwSelector.Matches(labels.Set(gw.Labels)) {
@@ -230,6 +231,33 @@ func decorateMatchingGateways(gwCrd networking_v1beta1.Gateway, gatewayNodeMappi
 				for _, gwServer := range gwServers {
 					gwHosts := gwServer.Hosts
 					hostnames = append(hostnames, gwHosts...)
+				}
+
+				// Metadata format: { gatewayName => array of hostnames }
+				node.Metadata[nodeMetadataKey].(graph.GatewaysMetadata)[gwCrd.Name] = hostnames
+			}
+		}
+	}
+}
+
+func decorateMatchingAPIGateways(gwCrd *k8s_networking_v1alpha2.Gateway, gatewayNodeMapping map[*models.WorkloadListItem][]*graph.Node, nodeMetadataKey graph.MetadataKey) {
+	gwSelector := labels.Set(gwCrd.Labels).AsSelector()
+	for gw, nodes := range gatewayNodeMapping {
+		if gwSelector.Matches(labels.Set(gw.Labels)) {
+
+			// If we are here, the GatewayCrd selects the GatewayAPI workload.
+			// So, all node graphs associated with the GW API workload should be listening
+			// requests for the hostnames listed in the GatewayAPI CRD.
+
+			// Let's extract the hostnames and add them to the node metadata.
+			for _, node := range nodes {
+				gwListeners := gwCrd.Spec.Listeners
+				var hostnames []string
+
+				for _, gwListener := range gwListeners {
+					if gwListener.Hostname != nil {
+						hostnames = append(hostnames, string(*gwListener.Hostname))
+					}
 				}
 
 				// Metadata format: { gatewayName => array of hostnames }
@@ -268,6 +296,10 @@ func (a IstioAppender) decorateGateways(trafficMap graph.TrafficMap, globalInfo 
 	egressWorkloads := a.getEgressGatewayWorkloads(globalInfo)
 	egressNodeMapping := resolveGatewayNodeMapping(egressWorkloads, graph.IsEgressGateway, trafficMap)
 
+	// Get Gateway API workloads (ingress)
+	gatewayAPIWorkloads := a.getGatewayAPIWorkloads(globalInfo)
+	gatewayAPINodeMapping := resolveGatewayNodeMapping(gatewayAPIWorkloads, graph.IsGatewayAPI, trafficMap)
+
 	// If there is any ingress or egress gateway node in the processing namespace, find Gateway CRDs and
 	// match them against gateways in the graph.
 	if len(ingressNodeMapping) != 0 || len(egressNodeMapping) != 0 {
@@ -276,6 +308,14 @@ func (a IstioAppender) decorateGateways(trafficMap graph.TrafficMap, globalInfo 
 		for _, gwCrd := range gatewaysCrds {
 			decorateMatchingGateways(gwCrd, ingressNodeMapping, graph.IsIngressGateway)
 			decorateMatchingGateways(gwCrd, egressNodeMapping, graph.IsEgressGateway)
+		}
+	}
+	// If there is any GatewayAPI node in the processing namespace, find GatewayAPI CRDs and
+	// match them against gateways in the graph.
+	if len(gatewayAPINodeMapping) != 0 {
+		gatewaysCrds := a.getGatewayAPIResources(globalInfo)
+		for _, gwCrd := range gatewaysCrds {
+			decorateMatchingAPIGateways(gwCrd, gatewayAPINodeMapping, graph.IsGatewayAPI)
 		}
 	}
 }
@@ -308,8 +348,28 @@ func (a IstioAppender) getIstioComponentWorkloads(component string, globalInfo *
 	return componentWorkloads
 }
 
-func (a IstioAppender) getIstioGatewayResources(globalInfo *graph.AppenderGlobalInfo) []networking_v1beta1.Gateway {
-	retVal := []networking_v1beta1.Gateway{}
+func (a IstioAppender) getGatewayAPIWorkloads(globalInfo *graph.AppenderGlobalInfo) map[string][]models.WorkloadListItem {
+	managedWorkloads := make(map[string][]models.WorkloadListItem)
+	for namespace := range a.AccessibleNamespaces {
+		criteria := business.WorkloadCriteria{Namespace: namespace, IncludeIstioResources: false, IncludeHealth: false}
+		wList, err := globalInfo.Business.Workload.GetWorkloadList(context.TODO(), criteria)
+		graph.CheckError(err)
+
+		// Find Istio managed Gateway API deployments
+		for _, workload := range wList.Workloads {
+			if workload.Type == "Deployment" {
+				if _, ok := workload.Labels["istio.io/gateway-name"]; ok {
+					managedWorkloads[namespace] = append(managedWorkloads[namespace], workload)
+				}
+			}
+		}
+	}
+
+	return managedWorkloads
+}
+
+func (a IstioAppender) getIstioGatewayResources(globalInfo *graph.AppenderGlobalInfo) []*networking_v1beta1.Gateway {
+	retVal := []*networking_v1beta1.Gateway{}
 	for namespace := range a.AccessibleNamespaces {
 		istioCfg, err := globalInfo.Business.IstioConfig.GetIstioConfigList(context.TODO(), business.IstioConfigCriteria{
 			IncludeGateways: true,
@@ -318,6 +378,21 @@ func (a IstioAppender) getIstioGatewayResources(globalInfo *graph.AppenderGlobal
 		graph.CheckError(err)
 
 		retVal = append(retVal, istioCfg.Gateways...)
+	}
+
+	return retVal
+}
+
+func (a IstioAppender) getGatewayAPIResources(globalInfo *graph.AppenderGlobalInfo) []*k8s_networking_v1alpha2.Gateway {
+	retVal := []*k8s_networking_v1alpha2.Gateway{}
+	for namespace := range a.AccessibleNamespaces {
+		istioCfg, err := globalInfo.Business.IstioConfig.GetIstioConfigList(context.TODO(), business.IstioConfigCriteria{
+			IncludeK8sGateways: true,
+			Namespace:          namespace,
+		})
+		graph.CheckError(err)
+
+		retVal = append(retVal, istioCfg.K8sGateways...)
 	}
 
 	return retVal

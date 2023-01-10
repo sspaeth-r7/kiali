@@ -5,7 +5,7 @@ import (
 	networking_v1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 )
 
-func CreateExternalServiceEntry() networking_v1beta1.ServiceEntry {
+func CreateExternalServiceEntry() *networking_v1beta1.ServiceEntry {
 	se := networking_v1beta1.ServiceEntry{}
 	se.Name = "external-svc-wikipedia"
 	se.Namespace = "wikipedia"
@@ -16,6 +16,18 @@ func CreateExternalServiceEntry() networking_v1beta1.ServiceEntry {
 			Number:   80,
 			Name:     "http-example",
 			Protocol: "HTTP",
+		},
+	}
+	return &se
+}
+
+func AddEndpointToServiceEntry(address, labelKey, labelValue string, se *networking_v1beta1.ServiceEntry) *networking_v1beta1.ServiceEntry {
+	se.Spec.Endpoints = []*api_networking_v1beta1.WorkloadEntry{
+		{
+			Address: address,
+			Labels: map[string]string{
+				labelKey: labelValue,
+			},
 		},
 	}
 	return se

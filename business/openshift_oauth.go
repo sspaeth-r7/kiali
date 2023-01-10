@@ -7,9 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -58,7 +59,7 @@ type OAuthRouteTLSSpec struct {
 	Termination string `json:"termination"`
 }
 
-const defaultRequestTimeout = 10 * time.Second
+var defaultAuthRequestTimeout = 0 * time.Second // will be determined by config first time it is needed
 
 var kialiNamespace string
 
@@ -149,7 +150,7 @@ func (in *OpenshiftOAuthService) GetUserInfo(token string) (*OAuthUser, error) {
 
 func getKialiNamespace() (string, error) {
 	if kialiNamespace == "" {
-		namespace, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		namespace, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 		if err != nil {
 			return "", err
 		}
@@ -204,7 +205,12 @@ func (in *OpenshiftOAuthService) Logout(token string) error {
 }
 
 func request(method string, serverPrefix string, url string, auth *string, useSystemCA bool, customCA string) ([]byte, error) {
-	return requestWithTimeout(method, serverPrefix, url, auth, time.Duration(defaultRequestTimeout), useSystemCA, customCA)
+	if defaultAuthRequestTimeout == (0 * time.Second) {
+		config := config.Get().Auth.OpenShift
+		defaultAuthRequestTimeout = time.Duration(config.AuthTimeout) * time.Second
+		log.Tracef("OpenShift auth timeout is set to [%v]", defaultAuthRequestTimeout)
+	}
+	return requestWithTimeout(method, serverPrefix, url, auth, time.Duration(defaultAuthRequestTimeout), useSystemCA, customCA)
 }
 
 func requestWithTimeout(method string, serverPrefix string, url string, auth *string, timeout time.Duration, useSystemCA bool, customCA string) ([]byte, error) {
@@ -224,7 +230,7 @@ func requestWithTimeout(method string, serverPrefix string, url string, auth *st
 	} else if !useSystemCA {
 		log.Debugf("Using serviceaccount CA for Openshift OAuth")
 		certPool := x509.NewCertPool()
-		cert, err := ioutil.ReadFile("/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+		cert, err := os.ReadFile("/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 		if err != nil {
 			return nil, fmt.Errorf("failed to get root CA certificates: %s", err)
 		}
@@ -260,7 +266,7 @@ func requestWithTimeout(method string, serverPrefix string, url string, auth *st
 
 	defer response.Body.Close()
 
-	body, err := ioutil.ReadAll(response.Body)
+	body, err := io.ReadAll(response.Body)
 
 	if err != nil {
 		return nil, fmt.Errorf("Failed to read response body for api endpoint [%s] for oauth consumption, error: %s", url, err)

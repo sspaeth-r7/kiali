@@ -1,4 +1,5 @@
-import { Given, Then, When } from "cypress-cucumber-preprocessor/steps";
+import { Given, Then, When } from "@badeball/cypress-cucumber-preprocessor";
+import { ensureKialiFinishedLoading } from "./transition";
 
 // Most of these "Given" implementations are directly using the Kiali API
 // in order to reach a well known state in the environment before performing
@@ -6,7 +7,7 @@ import { Given, Then, When } from "cypress-cucumber-preprocessor/steps";
 // and backwards compatibility is never guaranteed.
 
 Given('a namespace without override configuration for automatic sidecar injection', function () {
-    this.targetNamespace = "default";
+    this.targetNamespace = "sleep";
 
     // Make sure that the target namespace does not have override configuration
     cy.request('PATCH', '/api/namespaces/' + this.targetNamespace, {
@@ -20,7 +21,7 @@ Given('a namespace without override configuration for automatic sidecar injectio
 });
 
 Given('a namespace which has override configuration for automatic sidecar injection', function () {
-    this.targetNamespace = "default";
+    this.targetNamespace = "sleep";
     this.istioInjection = "enabled";
 
     // Make sure that the target namespace has some override configuration
@@ -49,7 +50,7 @@ Given('the override configuration for sidecar injection is {string}', function (
 });
 
 Given('a workload without a sidecar', function () {
-    this.targetNamespace = 'default';
+    this.targetNamespace = 'sleep';
     this.targetWorkload = 'sleep';
 
     // To achieve a workload without sidecar, we turn off injection in its namespace
@@ -75,6 +76,9 @@ Given('a workload without a sidecar', function () {
                 metadata: {
                     labels: {
                         "sidecar.istio.io/inject": null
+                    },
+                    annotations: {
+                        "sidecar.istio.io/inject": null
                     }
                 }
             }
@@ -88,7 +92,7 @@ Given('a workload without a sidecar', function () {
 });
 
 Given('a workload with a sidecar', function () {
-    this.targetNamespace = 'default';
+    this.targetNamespace = 'sleep';
     this.targetWorkload = 'sleep';
 
     // To achieve a workload with sidecar, we turn on injection in its namespace
@@ -97,7 +101,7 @@ Given('a workload with a sidecar', function () {
     this.workloadHasSidecar = true;
     this.workloadHasAutoInjectionOverride = false;
 
-    // Make sure that injection in the namespace is turned off
+    // Make sure that injection in the namespace is turned on
     cy.request('PATCH', '/api/namespaces/' + this.targetNamespace, {
         metadata: {
             labels: {
@@ -108,11 +112,19 @@ Given('a workload with a sidecar', function () {
     });
 
     // Make sure that the workload does not have override configuration
+    //
+    // TODO: The namespace injection label doesn't work with OSSM.
+    // Need some kind of tag to exclude certain tests based on the
+    // platform or environment. The sidecar label really shouldn't be
+    // present here for istio.
     cy.request('PATCH', `/api/namespaces/${this.targetNamespace}/workloads/${this.targetWorkload}?type=Deployment`, {
         spec: {
             template: {
                 metadata: {
                     labels: {
+                        "sidecar.istio.io/inject": "true"
+                    },
+                    annotations: {
                         "sidecar.istio.io/inject": null
                     }
                 }
@@ -162,6 +174,9 @@ Given('the workload does not have override configuration for automatic sidecar i
                     metadata: {
                         labels: {
                             "sidecar.istio.io/inject": null
+                        },
+                        annotations: {
+                            "sidecar.istio.io/inject": null
                         }
                     }
                 }
@@ -185,6 +200,9 @@ Given('the workload has override configuration for automatic sidecar injection',
                     metadata: {
                         labels: {
                             "sidecar.istio.io/inject": this.workloadHasSidecar ? 'true' : 'false'
+                        },
+                        annotations: {
+                            "sidecar.istio.io/inject": null
                         }
                     }
                 }
@@ -194,7 +212,7 @@ Given('the workload has override configuration for automatic sidecar injection',
 });
 
 Given('a workload with override configuration for automatic sidecar injection', function () {
-    this.targetNamespace = 'default';
+    this.targetNamespace = 'sleep';
     this.targetWorkload = 'sleep';
 
     // At the moment, it does not matter if the sidecar is being injected or not. The goal is to have
@@ -205,6 +223,9 @@ Given('a workload with override configuration for automatic sidecar injection', 
                 metadata: {
                     labels: {
                         "sidecar.istio.io/inject": 'true'
+                    },
+                    annotations: {
+                        "sidecar.istio.io/inject": null
                     }
                 }
             }
@@ -212,45 +233,40 @@ Given('a workload with override configuration for automatic sidecar injection', 
     });
 });
 
-When('I override the default automatic sidecar injection policy in the namespace to enabled', function () {
+When('I visit the overview page', function () {
     cy.visit('/console/overview?refresh=0');
     cy.contains('Inbound traffic', {matchCase: false}); // Make sure data finished loading, so avoid broken tests because of a re-render
+});
+
+When('I override the default automatic sidecar injection policy in the namespace to enabled', function () {
     cy.get('[data-test=overview-type-LIST]').click();
     cy.get(`[data-test=VirtualItem_${this.targetNamespace}] button`).click();
     cy.get(`[data-test=enable-${this.targetNamespace}-namespace-sidecar-injection]`).click();
-    cy.intercept(Cypress.config('baseUrl') + '/api/namespaces').as('namespacesReload');
     cy.get('[data-test=confirm-traffic-policies]').click();
-    cy.wait('@namespacesReload')
+    ensureKialiFinishedLoading();
 });
 
 When('I change the override configuration for automatic sidecar injection policy in the namespace to {string} it', function (enabledOrDisabled) {
-    cy.visit('/console/overview?refresh=0');
-    cy.contains('Inbound traffic', {matchCase: false}); // Make sure data finished loading, so avoid broken tests because of a re-render
     cy.get('[data-test=overview-type-LIST]').click();
     cy.get(`[data-test=VirtualItem_${this.targetNamespace}] button`).click();
     cy.get(`[data-test=${enabledOrDisabled}-${this.targetNamespace}-namespace-sidecar-injection]`).click();
-    cy.intercept(Cypress.config('baseUrl') + '/api/namespaces').as('namespacesReload');
     cy.get('[data-test=confirm-traffic-policies]').click();
-    cy.wait('@namespacesReload')
+    ensureKialiFinishedLoading();
 });
 
 When('I remove override configuration for sidecar injection in the namespace', function () {
-    cy.visit('/console/overview?refresh=0');
-    cy.contains('Inbound traffic', {matchCase: false}); // Make sure data finished loading, so avoid broken tests because of a re-render
     cy.get('[data-test=overview-type-LIST]').click();
     cy.get(`[data-test=VirtualItem_${this.targetNamespace}] button`).click();
     cy.get(`[data-test=remove-${this.targetNamespace}-namespace-sidecar-injection]`).click();
-    cy.intercept(Cypress.config('baseUrl') + '/api/namespaces').as('namespacesReload');
     cy.get('[data-test=confirm-traffic-policies]').click();
-    cy.wait('@namespacesReload')
+    ensureKialiFinishedLoading();
 });
 
 function switchWorkloadSidecarInjection(enableOrDisable) {
-    cy.visit(`/console/namespaces/${this.targetNamespace}/workloads/${this.targetWorkload}`);
-    cy.intercept(Cypress.config('baseUrl') + `/api/namespaces/${this.targetNamespace}/workloads/${this.targetWorkload}**`).as('workloadReload');
+    cy.visit(`/console/namespaces/${this.targetNamespace}/workloads/${this.targetWorkload}?refresh=0`);
     cy.get('[data-test="workload-actions-dropdown"] button').click();
     cy.get(`button[data-test=${enableOrDisable}_auto_injection]`).click();
-    cy.wait('@workloadReload');
+    ensureKialiFinishedLoading();
 }
 
 When('I override the default policy for automatic sidecar injection in the workload to {string} it', switchWorkloadSidecarInjection);
@@ -270,11 +286,11 @@ Then('I should see no override annotation for sidecar injection in the namespace
 });
 
 Then('the workload should get a sidecar', function () {
-    cy.get('[data-test=missing-sidecar-badge-for-sleep-workload-in-default-namespace]').should('not.exist');
+    cy.get('[data-test=missing-sidecar-badge-for-sleep-workload-in-sleep-namespace]').should('not.exist');
 });
 
 Then('the sidecar of the workload should vanish', function () {
-    cy.get('[data-test=missing-sidecar-badge-for-sleep-workload-in-default-namespace]').should('exist');
+    cy.get('[data-test=missing-sidecar-badge-for-sleep-workload-in-sleep-namespace]').should('exist');
 });
 
 Then('I should see no override annotation for sidecar injection in the workload', function () {

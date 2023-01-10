@@ -1,6 +1,6 @@
 {
   "name": "@kiali/kiali-ui",
-  "version": "v1.52.0",
+  "version": "1.63.0",
   "description": "React UI for [Kiali](https://github.com/kiali/kiali).",
   "keywords": [
     "istio service mesh",
@@ -41,8 +41,8 @@
     "build:prod": "sh -ac '. ./.env.downstream; npm run build:kiali'",
     "precypress:run:junit": "npm run cypress:delete:reports",
     "cypress": "cypress open",
-    "cypress:run": "cypress run",
-    "cypress:run:junit": "cypress run --reporter cypress-multi-reporters --reporter-options configFile=reporter-config.json",
+    "cypress:run": "cypress run -e TAGS=\"not @crd-validation\" && cypress run -e TAGS=\"@crd-validation\"",
+    "cypress:run:junit": "cypress run --reporter cypress-multi-reporters --reporter-options configFile=reporter-config.json -e TAGS=\"not @crd-validation\" && cypress run --reporter cypress-multi-reporters --reporter-options configFile=reporter-config.json -e TAGS=\"@crd-validation\"",
     "cypress:delete:reports": "rm cypress/results/* || true",
     "cypress:combine:reports": "jrm cypress/results/combined-report.xml \"cypress/results/*.xml\"",
     "lint": "eslint --ext js,ts,tsx src",
@@ -75,7 +75,8 @@
     "js-yaml": "3.13.1",
     "json-beautify": "1.0.1",
     "lodash": "^4.17.21",
-    "moment": "^2.24.0",
+    "micro-memoize": "4.0.9",
+    "moment": "^2.29.4",
     "postcss-normalize": "10.0.1",
     "react": "^17.0.1",
     "react-ace": "9.1.3",
@@ -87,6 +88,7 @@
     "react-resize-detector": "3.4.0",
     "react-router": "5.2.0",
     "react-router-dom": "5.2.0",
+    "react-virtualized": "^9.21.1",
     "redux": "4.0.3",
     "redux-persist": "5.10.0",
     "redux-persist-transform-filter": "0.0.18",
@@ -102,7 +104,6 @@
     "visibilityjs": "2.0.2"
   },
   "devDependencies": {
-    "@types/cypress-cucumber-preprocessor": "^4.0.1",
     "@types/cytoscape": "3.14.0",
     "@types/enzyme": "3.10.5",
     "@types/jest": "23.3.10",
@@ -114,17 +115,18 @@
     "@types/react-router-dom": "5.1.5",
     "@wojtekmaj/enzyme-adapter-react-17": "^0.6.7",
     "axios-mock-adapter": "1.16.0",
-    "cypress": "^9.2.1",
-    "cypress-cucumber-preprocessor": "^4.3.1",
-    "cypress-react-selector": "^2.3.17",
+    "cypress": "^10.7.0",
+    "@badeball/cypress-cucumber-preprocessor": "^12.2.0",
+    "@cypress/browserify-preprocessor": "3.0.2",
     "cypress-multi-reporters": "^1.6.0",
-    "junit-report-merger": "^3.0.5",
-    "mocha-junit-reporter": "^2.0.2",
+    "cypress-react-selector": "^2.3.17",
     "enzyme": "3.11.0",
     "enzyme-to-json": "3.4.4",
     "husky": "1.3.1",
     "jest-canvas-mock": "2.2.0",
     "jest-localstorage-mock": "2.4.2",
+    "junit-report-merger": "^3.0.5",
+    "mocha-junit-reporter": "^2.0.2",
     "node-sass": "^7.0.1",
     "prettier": "2.0.5",
     "pretty-quick": "2.0.1",
@@ -158,6 +160,6 @@
     "not ie <= 11"
   ],
   "cypress-cucumber-preprocessor": {
-    "nonGlobalStepDefinitions": true
+    "stepDefinitions": "cypress/integration/**/*.{js,ts}"
   }
 }

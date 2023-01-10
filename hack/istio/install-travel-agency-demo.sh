@@ -22,6 +22,8 @@ spec:
 EOM
 
   if [ "${ENABLE_INJECTION}" == "true" ]; then
+    # let's wait for smmr to be Ready before enabling sidecar injection
+    ${CLIENT_EXE} wait --for condition=Ready -n ${ISTIO_NAMESPACE} smmr/default --timeout 300s
     for d in $(${CLIENT_EXE} get deployments -n ${ns} -o name)
     do
       echo "Enabling sidecar injection for deployment: ${d}"
@@ -197,20 +199,12 @@ NAD
   fi
 fi
 
-# Deploy the demo
-
-${CLIENT_EXE} apply -f <(curl -L "${SOURCE}/travels/travel_agency.yaml") -n ${NAMESPACE_AGENCY}
-${CLIENT_EXE} apply -f <(curl -L "${SOURCE}/travels/travel_portal.yaml") -n ${NAMESPACE_PORTAL}
-${CLIENT_EXE} apply -f <(curl -L "${SOURCE}/travels/travel_control.yaml") -n ${NAMESPACE_CONTROL}
-
-if [ "${IS_MAISTRA}" == "true" ]; then
-  prepare_maistra "${NAMESPACE_AGENCY}"
-  prepare_maistra "${NAMESPACE_PORTAL}"
-  prepare_maistra "${NAMESPACE_CONTROL}"
-fi
-
 # Add SCC for OpenShift
 if [ "${IS_OPENSHIFT}" == "true" ]; then
+  ${CLIENT_EXE} adm policy add-scc-to-user anyuid -z default -n ${NAMESPACE_AGENCY}
+  ${CLIENT_EXE} adm policy add-scc-to-user anyuid -z default -n ${NAMESPACE_PORTAL}
+  ${CLIENT_EXE} adm policy add-scc-to-user anyuid -z default -n ${NAMESPACE_CONTROL}
+
   cat <<SCC | $CLIENT_EXE apply -f -
 apiVersion: security.openshift.io/v1
 kind: SecurityContextConstraints
@@ -227,6 +221,18 @@ users:
 - "system:serviceaccount:${NAMESPACE_PORTAL}:default"
 - "system:serviceaccount:${NAMESPACE_CONTROL}:default"
 SCC
+fi
+
+# Deploy the demo
+
+${CLIENT_EXE} apply -f <(curl -L "${SOURCE}/travels/travel_agency.yaml") -n ${NAMESPACE_AGENCY}
+${CLIENT_EXE} apply -f <(curl -L "${SOURCE}/travels/travel_portal.yaml") -n ${NAMESPACE_PORTAL}
+${CLIENT_EXE} apply -f <(curl -L "${SOURCE}/travels/travel_control.yaml") -n ${NAMESPACE_CONTROL}
+
+if [ "${IS_MAISTRA}" == "true" ]; then
+  prepare_maistra "${NAMESPACE_AGENCY}"
+  prepare_maistra "${NAMESPACE_PORTAL}"
+  prepare_maistra "${NAMESPACE_CONTROL}"
 fi
 
 # Set up metric classification

@@ -5,9 +5,9 @@ import { KialiIcon } from 'config/KialiIcon';
 import { Badge, PopoverPosition } from '@patternfly/react-core';
 import { Health } from 'types/Health';
 import { HealthIndicator } from 'components/Health/HealthIndicator';
-import { getPFBadge, PFBadge, PFBadges } from 'components/Pf/PfBadges';
-import KialiPageLink from 'components/Link/KialiPageLink';
+import { PFBadge, PFBadges } from 'components/Pf/PfBadges';
 import { serverConfig } from 'config';
+import KialiPageLinkContainer from "components/Link/KialiPageLink";
 
 interface LinkInfo {
   link: string;
@@ -33,38 +33,49 @@ const getTooltip = (tooltip: React.ReactFragment, nodeData: GraphNodeData): Reac
 export const getBadge = (nodeData: GraphNodeData, nodeType?: NodeType) => {
   switch (nodeType || nodeData.nodeType) {
     case NodeType.AGGREGATE:
-      return getPFBadge(PFBadges.Operation.badge, getTooltip(`Operation: ${nodeData.aggregate!}`, nodeData));
+      return (
+        <PFBadge
+          badge={PFBadges.Operation}
+          size="sm"
+          tooltip={getTooltip(`Operation: ${nodeData.aggregate!}`, nodeData)}
+        />
+      );
     case NodeType.APP:
-      return getPFBadge(PFBadges.App.badge, getTooltip(PFBadges.App.tt!, nodeData));
+      return <PFBadge badge={PFBadges.App} size="sm" tooltip={getTooltip(PFBadges.App.tt!, nodeData)} />;
     case NodeType.BOX:
       switch (nodeData.isBox) {
         case BoxByType.APP:
-          return getPFBadge(PFBadges.App.badge, getTooltip(PFBadges.App.tt!, nodeData));
+          return <PFBadge badge={PFBadges.App} size="sm" tooltip={getTooltip(PFBadges.App.tt!, nodeData)} />;
         case BoxByType.CLUSTER:
-          return getPFBadge(PFBadges.Cluster.badge, getTooltip(PFBadges.Cluster.tt!, nodeData));
+          return <PFBadge badge={PFBadges.Cluster} size="sm" tooltip={getTooltip(PFBadges.Cluster.tt!, nodeData)} />;
         case BoxByType.NAMESPACE:
-          return getPFBadge(PFBadges.Namespace.badge, getTooltip(PFBadges.Namespace.tt!, nodeData));
+          return (
+            <PFBadge badge={PFBadges.Namespace} size="sm" tooltip={getTooltip(PFBadges.Namespace.tt!, nodeData)} />
+          );
         default:
-          return <PFBadge badge={PFBadges.Unknown} />;
+          return <PFBadge badge={PFBadges.Unknown} size="sm" />;
       }
     case NodeType.SERVICE:
-      return !!nodeData.isServiceEntry
-        ? getPFBadge(
-            PFBadges.ServiceEntry.badge,
-            getTooltip(
-              nodeData.isServiceEntry.location === 'MESH_EXTERNAL'
-                ? 'External Service Entry'
-                : 'Internal Service Entry',
-              nodeData
-            )
-          )
-        : getPFBadge(PFBadges.Service.badge, getTooltip(PFBadges.Service.tt!, nodeData));
+      return !!nodeData.isServiceEntry ? (
+        <PFBadge
+          badge={PFBadges.ServiceEntry}
+          size="sm"
+          tooltip={getTooltip(
+            nodeData.isServiceEntry.location === 'MESH_EXTERNAL' ? 'External Service Entry' : 'Internal Service Entry',
+            nodeData
+          )}
+        />
+      ) : (
+        <PFBadge badge={PFBadges.Service} size="sm" tooltip={getTooltip(PFBadges.Service.tt!, nodeData)} />
+      );
     case NodeType.WORKLOAD:
-      return nodeData.hasWorkloadEntry
-        ? getPFBadge(PFBadges.WorkloadEntry.badge, getTooltip(PFBadges.WorkloadEntry.tt!, nodeData))
-        : getPFBadge(PFBadges.Workload.badge, getTooltip(PFBadges.Workload.tt!, nodeData));
+      return nodeData.hasWorkloadEntry ? (
+        <PFBadge badge={PFBadges.WorkloadEntry} size="sm" tooltip={getTooltip(PFBadges.WorkloadEntry.tt!, nodeData)} />
+      ) : (
+        <PFBadge badge={PFBadges.Workload} size="sm" tooltip={getTooltip(PFBadges.Workload.tt!, nodeData)} />
+      );
     default:
-      return <PFBadge badge={PFBadges.Unknown} />;
+      return <PFBadge badge={PFBadges.Unknown} size="sm" />;
   }
 };
 
@@ -128,9 +139,9 @@ export const getLink = (nodeData: GraphNodeData, nodeType?: NodeType, linkGenera
 
   if (link && !nodeData.isInaccessible) {
     return (
-      <KialiPageLink key={key} href={link} cluster={cluster}>
+      <KialiPageLinkContainer key={key} href={link} cluster={cluster} >
         {displayName}
-      </KialiPageLink>
+      </KialiPageLinkContainer>
     );
   }
 
@@ -140,7 +151,7 @@ export const getLink = (nodeData: GraphNodeData, nodeType?: NodeType, linkGenera
 export const renderBadgedHost = (host: string) => {
   return (
     <div>
-      <PFBadge badge={PFBadges.Host} />
+      <PFBadge key={`badgedHost-${host}`} badge={PFBadges.Host} size="sm" />
       {host === '*' ? '* (all hosts)' : host}
     </div>
   );
@@ -148,7 +159,7 @@ export const renderBadgedHost = (host: string) => {
 
 export const renderBadgedName = (nodeData: GraphNodeData, label?: string) => {
   return (
-    <div>
+    <div key={`badgedName-${nodeData.id}`}>
       <span style={{ marginRight: '1em', marginBottom: '3px', display: 'inline-block' }}>
         {label && (
           <span style={{ whiteSpace: 'pre' }}>
@@ -167,11 +178,11 @@ export const renderBadgedLink = (
   nodeType?: NodeType,
   label?: string,
   linkGenerator?: () => LinkInfo
-) => {
+): React.ReactFragment => {
   const link = getLink(nodeData, nodeType, linkGenerator);
 
   return (
-    <div>
+    <div key={`node-${nodeData.id}`}>
       <span style={{ marginRight: '1em', marginBottom: '3px', display: 'inline-block' }}>
         {label && (
           <span style={{ whiteSpace: 'pre' }}>

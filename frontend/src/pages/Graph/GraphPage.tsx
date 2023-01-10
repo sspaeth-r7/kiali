@@ -2,7 +2,6 @@ import * as Cy from 'cytoscape';
 import * as React from 'react';
 import { bindActionCreators } from 'redux';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
 import { RouteComponentProps } from 'react-router-dom';
 import FlexView from 'react-flexview';
 import { style } from 'typestyle';
@@ -45,7 +44,6 @@ import {
   findValueSelector,
   graphTypeSelector,
   hideValueSelector,
-  lastRefreshAtSelector,
   meshWideMTLSEnabledSelector,
   refreshIntervalSelector,
   replayActiveSelector,
@@ -53,7 +51,6 @@ import {
   trafficRatesSelector
 } from '../../store/Selectors';
 import { KialiAppState } from '../../store/Store';
-import { KialiAppAction } from '../../actions/KialiAppAction';
 import { GraphActions } from '../../actions/GraphActions';
 import { GraphToolbarActions } from '../../actions/GraphToolbarActions';
 import { NodeContextMenuContainer } from '../../components/CytoscapeGraph/ContextMenu/NodeContextMenu';
@@ -68,11 +65,22 @@ import GraphDataSource, { FetchParams, EMPTY_GRAPH_DATA } from '../../services/G
 import { NamespaceActions } from '../../actions/NamespaceAction';
 import GraphThunkActions from '../../actions/GraphThunkActions';
 import { JaegerTrace } from 'types/JaegerInfo';
+import { KialiDispatch } from "types/Redux";
 import { JaegerThunkActions } from 'actions/JaegerThunkActions';
 import GraphTour from 'pages/Graph/GraphHelpTour';
 import { getNextTourStop, TourInfo } from 'components/Tour/TourStop';
 import { EdgeContextMenu } from 'components/CytoscapeGraph/ContextMenu/EdgeContextMenu';
 import * as CytoscapeGraphUtils from '../../components/CytoscapeGraph/CytoscapeGraphUtils';
+import { isParentKiosk, kioskContextMenuAction } from "../../components/Kiosk/KioskActions";
+import ServiceWizard from "components/IstioWizards/ServiceWizard";
+import { ServiceDetailsInfo } from "types/ServiceInfo";
+import { DestinationRuleC, PeerAuthentication } from "types/IstioObjects";
+import { WizardAction, WizardMode } from "components/IstioWizards/WizardActions";
+import ConfirmDeleteTrafficRoutingModal from "components/IstioWizards/ConfirmDeleteTrafficRoutingModal";
+import { deleteServiceTrafficRouting } from "services/Api";
+import { canCreate, canUpdate } from "../../types/Permissions";
+import connectRefresh from "../../components/Refresh/connectRefresh";
+import { triggerRefresh } from "../../hooks/refresh";
 
 // GraphURLPathProps holds path variable values.  Currently all path variables are relevant only to a node graph
 type GraphURLPathProps = {
@@ -99,7 +107,7 @@ type ReduxProps = {
   graphType: GraphType;
   hideValue: string;
   isPageVisible: boolean;
-  lastRefreshAt: TimeInMilliseconds;
+  kiosk: string;
   layout: Layout;
   namespaceLayout: Layout;
   mtlsEnabled: boolean;
@@ -135,7 +143,9 @@ type ReduxProps = {
   updateSummary: (event: CytoscapeEvent) => void;
 };
 
-export type GraphPageProps = RouteComponentProps<Partial<GraphURLPathProps>> & ReduxProps;
+export type GraphPageProps = RouteComponentProps<Partial<GraphURLPathProps>> & ReduxProps & {
+  lastRefreshAt: TimeInMilliseconds;
+};
 
 export type GraphData = {
   elements: DecoratedGraphElements;
@@ -147,8 +157,24 @@ export type GraphData = {
   timestamp: TimeInMilliseconds;
 };
 
+type WizardsData = {
+  // Wizard configuration
+  showWizard: boolean;
+  wizardType: string;
+  updateMode: boolean;
+
+  // Data (payload) sent to the wizard or the confirm delete dialog
+  gateways: string[];
+  k8sGateways: string[];
+  peerAuthentications: PeerAuthentication[];
+  namespace: string;
+  serviceDetails?: ServiceDetailsInfo;
+}
+
 type GraphPageState = {
   graphData: GraphData;
+  wizardsData: WizardsData;
+  showConfirmDeleteTrafficRouting: boolean;
 };
 
 const NUMBER_OF_DATAPOINTS = 30;
@@ -301,7 +327,17 @@ export class GraphPage extends React.Component<GraphPageProps, GraphPageState> {
         fetchParams: this.graphDataSource.fetchParameters,
         isLoading: true,
         timestamp: 0
-      }
+      },
+      wizardsData: {
+        showWizard: false,
+        wizardType: '',
+        updateMode: false,
+        gateways: [],
+        k8sGateways: [],
+        peerAuthentications: [],
+        namespace: ''
+      },
+      showConfirmDeleteTrafficRouting: false
     };
   }
 
@@ -461,6 +497,8 @@ export class GraphPage extends React.Component<GraphPageProps, GraphPageState> {
                   graphData={this.state.graphData}
                   isMTLSEnabled={this.props.mtlsEnabled}
                   onEmptyGraphAction={this.handleEmptyGraphAction}
+                  onDeleteTrafficRouting={this.handleDeleteTrafficRouting}
+                  onLaunchWizard={this.handleLaunchWizard}
                   onNodeDoubleTap={this.handleDoubleTap}
                   ref={refInstance => this.setCytoscapeGraph(refInstance)}
                   {...this.props}
@@ -483,6 +521,8 @@ export class GraphPage extends React.Component<GraphPageProps, GraphPageState> {
                 injectServiceNodes={this.props.showServiceNodes}
                 isPageVisible={this.props.isPageVisible}
                 namespaces={this.props.activeNamespaces}
+                onLaunchWizard={this.handleLaunchWizard}
+                onDeleteTrafficRouting={this.handleDeleteTrafficRouting}
                 queryTime={this.state.graphData.timestamp / 1000}
                 trafficRates={this.props.trafficRates}
                 {...computePrometheusRateParams(this.props.duration, NUMBER_OF_DATAPOINTS)}
@@ -490,6 +530,33 @@ export class GraphPage extends React.Component<GraphPageProps, GraphPageState> {
             )}
           </FlexView>
         </FlexView>
+        <ServiceWizard
+          show={this.state.wizardsData.showWizard}
+          type={this.state.wizardsData.wizardType}
+          update={this.state.wizardsData.updateMode}
+          namespace={this.state.wizardsData.namespace}
+          serviceName={this.state.wizardsData.serviceDetails?.service?.name || ''}
+          workloads={this.state.wizardsData.serviceDetails?.workloads || []}
+          subServices={this.state.wizardsData.serviceDetails?.subServices || []}
+          createOrUpdate={canCreate(this.state.wizardsData.serviceDetails?.istioPermissions) || canUpdate(this.state.wizardsData.serviceDetails?.istioPermissions)}
+          virtualServices={this.state.wizardsData.serviceDetails?.virtualServices || []}
+          destinationRules={this.state.wizardsData.serviceDetails?.destinationRules || []}
+          gateways={this.state.wizardsData.gateways || []}
+          k8sGateways={this.state.wizardsData.k8sGateways || []}
+          k8sHTTPRoutes={this.state.wizardsData.serviceDetails?.k8sHTTPRoutes || []}
+          peerAuthentications={this.state.wizardsData.peerAuthentications || []}
+          tlsStatus={this.state.wizardsData.serviceDetails?.namespaceMTLS}
+          onClose={this.handleWizardClose}
+        />
+        {this.state.showConfirmDeleteTrafficRouting && (
+          <ConfirmDeleteTrafficRoutingModal
+            isOpen={true}
+            destinationRules={DestinationRuleC.fromDrArray(this.state.wizardsData.serviceDetails!.destinationRules)}
+            virtualServices={this.state.wizardsData.serviceDetails!.virtualServices}
+            k8sHTTPRoutes={this.state.wizardsData.serviceDetails!.k8sHTTPRoutes}
+            onCancel={() => this.setState({showConfirmDeleteTrafficRouting: false})}
+            onConfirm={this.handleConfirmDeleteServiceTrafficRouting} />
+        )}
       </>
     );
   }
@@ -668,8 +735,70 @@ export class GraphPage extends React.Component<GraphPageProps, GraphPageState> {
       urlNodeType = 'applications';
     }
     const detailsPageUrl = makeAppDetailsPageUrl(targetNode.namespace.name, urlNodeType, name);
-    history.push(detailsPageUrl);
+    if (isParentKiosk(this.props.kiosk)) {
+      kioskContextMenuAction(detailsPageUrl);
+    } else {
+      history.push(detailsPageUrl);
+    }
     return;
+  };
+
+  private handleLaunchWizard = (action: WizardAction, mode: WizardMode, namespace: string, serviceDetails: ServiceDetailsInfo, gateways: string[], peerAuths: PeerAuthentication[]) => {
+    this.setState(prevState => ({
+      wizardsData: {
+        ...prevState.wizardsData,
+        showWizard: true,
+        wizardType: action,
+        updateMode: mode === "update",
+        namespace: namespace,
+        serviceDetails: serviceDetails,
+        gateways: gateways,
+        peerAuthentications: peerAuths
+      }
+    }));
+  };
+
+  private handleWizardClose = (changed: boolean) => {
+    if (changed) {
+      this.setState(prevState => ({
+        wizardsData: {
+          ...prevState.wizardsData,
+          showWizard: false
+        }
+      }));
+      triggerRefresh();
+    } else {
+      this.setState(prevState => ({
+        wizardsData: {
+          ...prevState.wizardsData,
+          showWizard: false
+        }
+      }));
+    }
+  }
+
+  private handleDeleteTrafficRouting = (_key: string, serviceDetail: ServiceDetailsInfo) => {
+    this.setState(prevState => ({
+      showConfirmDeleteTrafficRouting: true,
+      wizardsData: {
+        ...prevState.wizardsData,
+        serviceDetails: serviceDetail
+      }
+    }));
+  };
+
+  private handleConfirmDeleteServiceTrafficRouting = () => {
+    this.setState({
+      showConfirmDeleteTrafficRouting:false
+    });
+
+    deleteServiceTrafficRouting(this.state.wizardsData!.serviceDetails!)
+      .then(_results => {
+        triggerRefresh();
+      })
+      .catch(error => {
+        AlertUtils.addError('Could not delete Istio config objects.', error);
+      });
   };
 
   private toggleHelp = () => {
@@ -738,7 +867,7 @@ const mapStateToProps = (state: KialiAppState) => ({
   graphType: graphTypeSelector(state),
   hideValue: hideValueSelector(state),
   isPageVisible: state.globalState.isPageVisible,
-  lastRefreshAt: lastRefreshAtSelector(state),
+  kiosk: state.globalState.kiosk,
   layout: state.graph.layout,
   mtlsEnabled: meshWideMTLSEnabledSelector(state),
   namespaceLayout: state.graph.namespaceLayout,
@@ -762,7 +891,7 @@ const mapStateToProps = (state: KialiAppState) => ({
   trafficRates: trafficRatesSelector(state)
 });
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
   endTour: bindActionCreators(TourActions.endTour, dispatch),
   onNamespaceChange: bindActionCreators(GraphActions.onNamespaceChange, dispatch),
   onReady: (cy: Cy.Core) => dispatch(GraphThunkActions.graphReady(cy)),
@@ -778,5 +907,5 @@ const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAp
   updateSummary: (event: CytoscapeEvent) => dispatch(GraphActions.updateSummary(event))
 });
 
-const GraphPageContainer = connect(mapStateToProps, mapDispatchToProps)(GraphPage);
+const GraphPageContainer = connectRefresh(connect(mapStateToProps, mapDispatchToProps)(GraphPage));
 export default GraphPageContainer;

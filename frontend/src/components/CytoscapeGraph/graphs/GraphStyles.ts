@@ -21,6 +21,7 @@ import _ from 'lodash';
 import * as Cy from 'cytoscape';
 import { PFBadges } from 'components/Pf/PfBadges';
 import { config } from 'config/Config';
+import { kialiBadge, PFBadgeType } from '../../Pf/PfBadges';
 
 export const HighlightClass = 'mousehighlight';
 export const HoveredClass = 'mousehover';
@@ -68,9 +69,9 @@ const NodeIconRequestTimeout = icons.istio.requestTimeout.className; // clock
 const NodeIconTrafficShifting = icons.istio.trafficShifting.className; // share-alt
 const NodeIconWorkloadEntry = icons.istio.workloadEntry.className; // pf-icon-virtual-machine
 const NodeTextColor = PFColors.Black1000;
-const NodeTextColorBox = PFColors.White;
+const NodeTextColorBox = PFColors.Black1000;
 const NodeTextBackgroundColor = PFColors.White;
-const NodeTextBackgroundColorBox = PFColors.Black700;
+const NodeTextBackgroundColorBox = PFColors.Black200;
 const NodeBadgeBackgroundColor = PFColors.Purple500;
 const NodeBadgeColor = PFColors.White;
 const NodeTextFont = EdgeTextFont;
@@ -93,14 +94,6 @@ const badgesDefault = style({
   color: NodeBadgeColor,
   display: 'flex',
   padding: '3px 3px'
-});
-
-const contentBoxPfBadge = style({
-  backgroundColor: PFColors.Badge,
-  marginRight: '5px',
-  minWidth: '24px', // reduce typical minWidth for badge to save label space
-  paddingLeft: '0px',
-  paddingRight: '0px'
 });
 
 const contentDefault = style({
@@ -274,7 +267,10 @@ export class GraphStyles {
         badges = `<span class="${NodeIconWorkloadEntry} ${badgeMargin(badges)}"></span> ${badges}`;
       }
       if (node.isRoot) {
-        if (node.isGateway?.ingressInfo?.hostnames?.length !== undefined) {
+        if (
+          node.isGateway?.ingressInfo?.hostnames?.length !== undefined ||
+          node.isGateway?.gatewayAPIInfo?.hostnames?.length !== undefined
+        ) {
           badges = `<span class="${NodeIconGateway} ${badgeMargin(badges)}"></span> ${badges}`;
         }
         badges = `<span class="${NodeIconRoot} ${badgeMargin(badges)}"></span> ${badges}`;
@@ -401,22 +397,24 @@ export class GraphStyles {
 
     if (isBox) {
       let appBoxStyle = '';
-      let pfBadge = '';
+      let pfBadge: PFBadgeType | undefined;
       switch (isBox) {
         case BoxByType.APP:
-          pfBadge = PFBadges.App.badge;
+          pfBadge = PFBadges.App;
           appBoxStyle += `font-size: ${settings.fontLabel}px;`;
           break;
         case BoxByType.CLUSTER:
-          pfBadge = PFBadges.Cluster.badge;
+          pfBadge = PFBadges.Cluster;
           break;
         case BoxByType.NAMESPACE:
-          pfBadge = PFBadges.Namespace.badge;
+          pfBadge = PFBadges.Namespace;
           break;
         default:
           console.warn(`GraphSyles: Unexpected box [${isBox}] `);
       }
-      const contentPfBadge = `<span class="pf-c-badge pf-m-unread ${contentBoxPfBadge}" style="${appBoxStyle}">${pfBadge}</span>`;
+      const badge = pfBadge ? pfBadge.badge : '';
+      const pfBadgeStyle = pfBadge ? style(pfBadge.style) : '';
+      const contentPfBadge = `<span class="pf-c-badge pf-m-unread ${kialiBadge} ${pfBadgeStyle}" style="${appBoxStyle}">${badge}</span>`;
       const contentSpan = `<span class="${contentClasses} ${contentBox}" style="${appBoxStyle} ${contentStyle}">${contentPfBadge}${contentText}</span>`;
       return `<div class="${labelDefault} ${labelBox}" style="${labelStyle}">${badges}${contentSpan}</div>`;
     }
@@ -425,6 +423,7 @@ export class GraphStyles {
     node.hasVS?.hostnames?.forEach(h => hosts.push(h === '*' ? '* (all hosts)' : h));
     node.isGateway?.ingressInfo?.hostnames?.forEach(h => hosts.push(h === '*' ? '* (all hosts)' : h));
     node.isGateway?.egressInfo?.hostnames?.forEach(h => hosts.push(h === '*' ? '* (all hosts)' : h));
+    node.isGateway?.gatewayAPIInfo?.hostnames?.forEach(h => hosts.push(h === '*' ? '* (all hosts)' : h));
 
     let htmlHosts = '';
     if (hosts.length !== 0) {

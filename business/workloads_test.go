@@ -2,21 +2,19 @@ package business
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"io"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	osapps_v1 "github.com/openshift/api/apps/v1"
 	osproject_v1 "github.com/openshift/api/project/v1"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	apps_v1 "k8s.io/api/apps/v1"
-	batch_v1 "k8s.io/api/batch/v1"
-	batch_v1beta1 "k8s.io/api/batch/v1beta1"
+	"github.com/stretchr/testify/require"
 	core_v1 "k8s.io/api/core/v1"
-	errors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/kiali/kiali/config"
@@ -26,33 +24,41 @@ import (
 	"github.com/kiali/kiali/prometheus/prometheustest"
 )
 
-func setupWorkloadService(k8s *kubetest.K8SClientMock) WorkloadService {
+func setupWorkloadService(k8s kubernetes.ClientInterface, conf *config.Config) WorkloadService {
+	// config needs to be set by other services since those rely on the global.
+	config.Set(conf)
 	prom := new(prometheustest.PromClientMock)
-	return WorkloadService{k8s: k8s, prom: prom, businessLayer: NewWithBackends(k8s, prom, nil)}
+	return *NewWorkloadService(k8s, prom, nil, NewWithBackends(k8s, prom, nil), conf)
+}
+
+func callStreamPodLogs(svc WorkloadService, namespace, podName string, opts *LogOptions) PodLog {
+	w := httptest.NewRecorder()
+	_ = svc.StreamPodLogs(namespace, podName, opts, w)
+
+	response := w.Result()
+	body, _ := io.ReadAll(response.Body)
+
+	var podLogs PodLog
+	_ = json.Unmarshal(body, &podLogs)
+
+	return podLogs
 }
 
 func TestGetWorkloadListFromDeployments(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDeployments(), nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.ReplicaSet{}, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.Pod{}, nil)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(core_v1.Pod{}, nil)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(&kubernetes.PodLogs{}, nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeDeployments() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -60,7 +66,7 @@ func TestGetWorkloadListFromDeployments(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(3, len(workloads))
+	require.Equal(3, len(workloads))
 	assert.Equal("httpbin-v1", workloads[0].Name)
 	assert.Equal(true, workloads[0].AppLabel)
 	assert.Equal(false, workloads[0].VersionLabel)
@@ -77,26 +83,19 @@ func TestGetWorkloadListFromDeployments(t *testing.T) {
 
 func TestGetWorkloadListFromReplicaSets(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeReplicaSets(), nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.Pod{}, nil)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(core_v1.Pod{}, nil)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(&kubernetes.PodLogs{}, nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeReplicaSets() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -104,7 +103,7 @@ func TestGetWorkloadListFromReplicaSets(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(3, len(workloads))
+	require.Equal(3, len(workloads))
 	assert.Equal("httpbin-v1", workloads[0].Name)
 	assert.Equal(true, workloads[0].AppLabel)
 	assert.Equal(false, workloads[0].VersionLabel)
@@ -121,22 +120,19 @@ func TestGetWorkloadListFromReplicaSets(t *testing.T) {
 
 func TestGetWorkloadListFromReplicationControllers(t *testing.T) {
 	assert := assert.New(t)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.ReplicaSet{}, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeReplicationControllers(), nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.Pod{}, nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeReplicationControllers() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	excludedWorkloads = map[string]bool{}
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
@@ -145,7 +141,7 @@ func TestGetWorkloadListFromReplicationControllers(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(3, len(workloads))
+	require.Equal(3, len(workloads))
 	assert.Equal("httpbin-v1", workloads[0].Name)
 	assert.Equal(true, workloads[0].AppLabel)
 	assert.Equal(false, workloads[0].VersionLabel)
@@ -162,24 +158,19 @@ func TestGetWorkloadListFromReplicationControllers(t *testing.T) {
 
 func TestGetWorkloadListFromDeploymentConfigs(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDeploymentConfigs(), nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.ReplicaSet{}, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.Pod{}, nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeDeploymentConfigs() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	excludedWorkloads = map[string]bool{}
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
@@ -188,7 +179,7 @@ func TestGetWorkloadListFromDeploymentConfigs(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(3, len(workloads))
+	require.Equal(3, len(workloads))
 	assert.Equal("httpbin-v1", workloads[0].Name)
 	assert.Equal(true, workloads[0].AppLabel)
 	assert.Equal(false, workloads[0].VersionLabel)
@@ -205,24 +196,19 @@ func TestGetWorkloadListFromDeploymentConfigs(t *testing.T) {
 
 func TestGetWorkloadListFromStatefulSets(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.ReplicaSet{}, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeStatefulSets(), nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.Pod{}, nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeStatefulSets() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	excludedWorkloads = map[string]bool{}
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
@@ -231,7 +217,7 @@ func TestGetWorkloadListFromStatefulSets(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(3, len(workloads))
+	require.Equal(3, len(workloads))
 	assert.Equal("httpbin-v1", workloads[0].Name)
 	assert.Equal(true, workloads[0].AppLabel)
 	assert.Equal(false, workloads[0].VersionLabel)
@@ -248,24 +234,19 @@ func TestGetWorkloadListFromStatefulSets(t *testing.T) {
 
 func TestGetWorkloadListFromDaemonSets(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.ReplicaSet{}, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDaemonSets(), nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.Pod{}, nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeDaemonSets() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	excludedWorkloads = map[string]bool{}
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
@@ -274,7 +255,7 @@ func TestGetWorkloadListFromDaemonSets(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(3, len(workloads))
+	require.Equal(3, len(workloads))
 	assert.Equal("httpbin-v1", workloads[0].Name)
 	assert.Equal(true, workloads[0].AppLabel)
 	assert.Equal(false, workloads[0].VersionLabel)
@@ -291,24 +272,27 @@ func TestGetWorkloadListFromDaemonSets(t *testing.T) {
 
 func TestGetWorkloadListFromDepRCPod(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDepSyncedWithRS(), nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeRSSyncedWithPods(), nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsSyncedWithDeployments(), nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeDepSyncedWithRS() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakeRSSyncedWithPods() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakePodsSyncedWithDeployments() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -316,7 +300,7 @@ func TestGetWorkloadListFromDepRCPod(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(1, len(workloads))
+	require.Equal(1, len(workloads))
 	assert.Equal("details-v1", workloads[0].Name)
 	assert.Equal("Deployment", workloads[0].Type)
 	assert.Equal(true, workloads[0].AppLabel)
@@ -325,24 +309,19 @@ func TestGetWorkloadListFromDepRCPod(t *testing.T) {
 
 func TestGetWorkloadListFromPod(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.ReplicaSet{}, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsNoController(), nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakePodsNoController() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -350,7 +329,7 @@ func TestGetWorkloadListFromPod(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(1, len(workloads))
+	require.Equal(1, len(workloads))
 	assert.Equal("orphan-pod", workloads[0].Name)
 	assert.Equal("Pod", workloads[0].Type)
 	assert.Equal(true, workloads[0].AppLabel)
@@ -359,24 +338,23 @@ func TestGetWorkloadListFromPod(t *testing.T) {
 
 func TestGetWorkloadListFromPods(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeCustomControllerRSSyncedWithPods(), nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsFromCustomController(), nil)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeCustomControllerRSSyncedWithPods() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakePodsFromCustomController() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -384,43 +362,39 @@ func TestGetWorkloadListFromPods(t *testing.T) {
 
 	assert.Equal("Namespace", workloadList.Namespace.Name)
 
-	assert.Equal(1, len(workloads))
-	assert.Equal("custom-controller", workloads[0].Name)
-	assert.Equal("CustomController", workloads[0].Type)
+	require.Equal(1, len(workloads))
+	assert.Equal("custom-controller-RS-123", workloads[0].Name)
+	assert.Equal("ReplicaSet", workloads[0].Type)
 	assert.Equal(true, workloads[0].AppLabel)
 	assert.Equal(true, workloads[0].VersionLabel)
 }
 
 func TestGetWorkloadFromDeployment(t *testing.T) {
 	assert := assert.New(t)
-
-	// Setup mocks
-	gr := schema.GroupResource{
-		Group:    "test-group",
-		Resource: "test-resource",
-	}
-	notfound := errors.NewNotFound(gr, "not found")
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}}, nil)
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&FakeDepSyncedWithRS()[0], nil)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeRSSyncedWithPods(), nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.StatefulSet{}, notfound)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsSyncedWithDeployments(), nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
+	require := require.New(t)
 
 	// Disabling CustomDashboards on Workload details testing
-	conf := config.Get()
+	conf := config.NewConfig()
 	conf.ExternalServices.CustomDashboards.Enabled = false
-	config.Set(conf)
 
-	svc := setupWorkloadService(k8s)
+	// Setup mocks
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+		&FakeDepSyncedWithRS()[0],
+	}
+	for _, o := range FakeRSSyncedWithPods() {
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, o := range FakePodsSyncedWithDeployments() {
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, conf)
+
 	criteria := WorkloadCriteria{Namespace: "Namespace", WorkloadName: "details-v1", WorkloadType: "", IncludeServices: false}
-	workload, _ := svc.GetWorkload(context.TODO(), criteria)
+	workload, err := svc.GetWorkload(context.TODO(), criteria)
+	require.NoError(err)
 
 	assert.Equal("details-v1", workload.Name)
 	assert.Equal("Deployment", workload.Type)
@@ -430,35 +404,32 @@ func TestGetWorkloadFromDeployment(t *testing.T) {
 
 func TestGetWorkloadWithInvalidWorkloadType(t *testing.T) {
 	assert := assert.New(t)
-
-	// Setup mocks
-	gr := schema.GroupResource{
-		Group:    "test-group",
-		Resource: "test-resource",
-	}
-	notfound := errors.NewNotFound(gr, "not found")
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&FakeDepSyncedWithRS()[0], nil)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeRSSyncedWithPods(), nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.StatefulSet{}, notfound)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsSyncedWithDeployments(), nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
+	require := require.New(t)
 
 	// Disabling CustomDashboards on Workload details testing
-	conf := config.Get()
+	conf := config.NewConfig()
 	conf.ExternalServices.CustomDashboards.Enabled = false
-	config.Set(conf)
 
-	svc := setupWorkloadService(k8s)
+	// Setup mocks
+	kubeObjs := []runtime.Object{
+		&FakeDepSyncedWithRS()[0],
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeRSSyncedWithPods() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakePodsSyncedWithDeployments() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, conf)
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", WorkloadName: "details-v1", WorkloadType: "invalid", IncludeServices: false}
-	workload, _ := svc.GetWorkload(context.TODO(), criteria)
+	workload, err := svc.GetWorkload(context.TODO(), criteria)
+	require.NoError(err)
 
 	assert.Equal("details-v1", workload.Name)
 	assert.Equal("Deployment", workload.Type)
@@ -468,38 +439,41 @@ func TestGetWorkloadWithInvalidWorkloadType(t *testing.T) {
 
 func TestGetWorkloadFromPods(t *testing.T) {
 	assert := assert.New(t)
-
-	// Setup mocks
-	gr := schema.GroupResource{
-		Group:    "test-group",
-		Resource: "test-resource",
-	}
-	notfound := errors.NewNotFound(gr, "not found")
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.Deployment{}, notfound)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeCustomControllerRSSyncedWithPods(), nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.StatefulSet{}, notfound)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsFromCustomController(), nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
+	require := require.New(t)
 
 	// Disabling CustomDashboards on Workload details testing
-	conf := config.Get()
+	conf := config.NewConfig()
 	conf.ExternalServices.CustomDashboards.Enabled = false
-	config.Set(conf)
 
-	svc := setupWorkloadService(k8s)
+	// Setup mocks
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeCustomControllerRSSyncedWithPods() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakePodsFromCustomController() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, conf)
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", WorkloadName: "custom-controller", WorkloadType: "", IncludeServices: false}
-	workload, _ := svc.GetWorkload(context.TODO(), criteria)
+	workload, err := svc.GetWorkload(context.TODO(), criteria)
+	require.Error(err)
 
-	assert.Equal("custom-controller", workload.Name)
-	assert.Equal("CustomController", workload.Type)
+	// custom controller is not a workload type, only its replica set(s)
+	assert.Equal((*models.Workload)(nil), workload)
+
+	criteria = WorkloadCriteria{Namespace: "Namespace", WorkloadName: "custom-controller-RS-123", WorkloadType: "", IncludeServices: false}
+	workload, err = svc.GetWorkload(context.TODO(), criteria)
+	require.NoError(err)
+
+	assert.Equal("custom-controller-RS-123", workload.Name)
+	assert.Equal("ReplicaSet", workload.Type)
 	assert.Equal(true, workload.AppLabel)
 	assert.Equal(true, workload.VersionLabel)
 	assert.Equal(0, len(workload.Runtimes))
@@ -508,230 +482,261 @@ func TestGetWorkloadFromPods(t *testing.T) {
 
 func TestGetPods(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsSyncedWithDeployments(), nil)
-	k8s.On("IsOpenShift").Return(false)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakePodsSyncedWithDeployments() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	pods, _ := svc.GetPods(context.TODO(), "Namespace", "app=httpbin")
 
-	assert.Equal(1, len(pods))
+	require.Equal(1, len(pods))
 	assert.Equal("details-v1-3618568057-dnkjp", pods[0].Name)
 }
 
 func TestGetPod(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
-	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodSyncedWithDeployments(), nil)
-	k8s.On("IsOpenShift").Return(false)
+	k8s := kubetest.NewFakeK8sClient(FakePodSyncedWithDeployments(), &osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}})
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
-	svc := setupWorkloadService(k8s)
-
-	pod, _ := svc.GetPod("Namespace", "details-v1-3618568057-dnkjp")
+	pod, err := svc.GetPod("Namespace", "details-v1-3618568057-dnkjp")
+	require.NoError(err)
 
 	assert.Equal("details-v1-3618568057-dnkjp", pod.Name)
 }
 
+// a fake log streamer that returns a fixed string for testing.
+type logStreamer struct {
+	logs string
+	kubernetes.ClientInterface
+}
+
+func (l *logStreamer) StreamPodLogs(namespace, name string, opts *core_v1.PodLogOptions) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(l.logs)), nil
+}
+
 func TestGetPodLogs(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
-	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(FakePodLogsSyncedWithDeployments(), nil)
-	k8s.On("IsOpenShift").Return(false)
+	k8s := &logStreamer{
+		logs:            FakePodLogsSyncedWithDeployments().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}}),
+	}
 
-	svc := setupWorkloadService(k8s)
+	svc := setupWorkloadService(k8s, config.NewConfig())
+	podLogs := callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}})
 
-	podLogs, _ := svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}})
+	require.Equal(len(podLogs.Entries), 4)
 
-	assert.Equal(len(podLogs.Entries), 4)
-
-	assert.Equal("2018-01-02 03:34:28", podLogs.Entries[0].Timestamp)
-	assert.Equal(int64(1514864068), podLogs.Entries[0].TimestampUnix)
+	assert.Equal("2018-01-02 03:34:28.000", podLogs.Entries[0].Timestamp)
+	assert.Equal(int64(1514864068000), podLogs.Entries[0].TimestampUnix)
 	assert.Equal("INFO #1 Log Message", podLogs.Entries[0].Message)
 	assert.Equal("INFO", podLogs.Entries[0].Severity)
 
-	assert.Equal("2018-01-02 04:34:28", podLogs.Entries[1].Timestamp)
-	assert.Equal(int64(1514867668), podLogs.Entries[1].TimestampUnix)
+	assert.Equal("2018-01-02 04:34:28.000", podLogs.Entries[1].Timestamp)
+	assert.Equal(int64(1514867668000), podLogs.Entries[1].TimestampUnix)
 	assert.Equal("WARN #2 Log Message", podLogs.Entries[1].Message)
 	assert.Equal("WARN", podLogs.Entries[1].Severity)
 
-	assert.Equal("2018-01-02 05:34:28", podLogs.Entries[2].Timestamp)
-	assert.Equal(int64(1514871268), podLogs.Entries[2].TimestampUnix)
+	assert.Equal("2018-01-02 05:34:28.000", podLogs.Entries[2].Timestamp)
+	assert.Equal(int64(1514871268000), podLogs.Entries[2].TimestampUnix)
 	assert.Equal("#3 Log Message", podLogs.Entries[2].Message)
 	assert.Equal("INFO", podLogs.Entries[2].Severity)
 
-	assert.Equal("2018-01-02 06:34:28", podLogs.Entries[3].Timestamp)
-	assert.Equal(int64(1514874868), podLogs.Entries[3].TimestampUnix)
+	assert.Equal("2018-01-02 06:34:28.000", podLogs.Entries[3].Timestamp)
+	assert.Equal(int64(1514874868000), podLogs.Entries[3].TimestampUnix)
 	assert.Equal("#4 Log error Message", podLogs.Entries[3].Message)
 	assert.Equal("ERROR", podLogs.Entries[3].Severity)
 }
 
-func TestGetPodLogsTailLines(t *testing.T) {
+func TestGetPodLogsMaxLines(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
+	require := require.New(t)
 
-	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(FakePodLogsSyncedWithDeployments(), nil)
-	k8s.On("IsOpenShift").Return(false)
+	k8s := &logStreamer{
+		logs:            FakePodLogsSyncedWithDeployments().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}}),
+	}
 
-	svc := setupWorkloadService(k8s)
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
-	tailLines := int64(2)
-	duration, _ := time.ParseDuration("6h") // still need a duration to force manual tailLines handling
-	podLogs, _ := svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details", TailLines: &tailLines}, Duration: &duration})
+	maxLines := 2
+	duration, _ := time.ParseDuration("6h")
+	podLogs := callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}, MaxLines: &maxLines, Duration: &duration})
 
-	assert.Equal(2, len(podLogs.Entries))
-	assert.Equal("#3 Log Message", podLogs.Entries[0].Message)
-	assert.Equal("#4 Log error Message", podLogs.Entries[1].Message)
+	require.Equal(2, len(podLogs.Entries))
+	assert.Equal("INFO #1 Log Message", podLogs.Entries[0].Message)
+	assert.Equal("WARN #2 Log Message", podLogs.Entries[1].Message)
 }
 
 func TestGetPodLogsDuration(t *testing.T) {
 	assert := assert.New(t)
+	require := require.New(t)
 	conf := config.NewConfig()
-	config.Set(conf)
 
-	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(FakePodLogsSyncedWithDeployments(), nil)
-	k8s.On("IsOpenShift").Return(false)
-
-	svc := setupWorkloadService(k8s)
+	proj := &osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}}
+	k8s := &logStreamer{
+		logs:            FakePodLogsSyncedWithDeployments().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(proj),
+	}
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	duration, _ := time.ParseDuration("59m")
-	podLogs, _ := svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}, Duration: &duration})
-	assert.Equal(1, len(podLogs.Entries))
+	podLogs := callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}, Duration: &duration})
+	require.Equal(1, len(podLogs.Entries))
 	assert.Equal("INFO #1 Log Message", podLogs.Entries[0].Message)
 
+	// Re-setup mocks
+	k8s = &logStreamer{
+		logs:            FakePodLogsSyncedWithDeployments().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(proj),
+	}
+	svc = setupWorkloadService(k8s, conf)
+
 	duration, _ = time.ParseDuration("1h")
-	podLogs, _ = svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}, Duration: &duration})
-	assert.Equal(2, len(podLogs.Entries))
+	podLogs = callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}, Duration: &duration})
+	require.Equal(2, len(podLogs.Entries))
 	assert.Equal("INFO #1 Log Message", podLogs.Entries[0].Message)
 	assert.Equal("WARN #2 Log Message", podLogs.Entries[1].Message)
 
+	// Re-setup mocks
+	k8s = &logStreamer{
+		logs:            FakePodLogsSyncedWithDeployments().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(proj),
+	}
+	svc = setupWorkloadService(k8s, conf)
+
 	duration, _ = time.ParseDuration("2h")
-	podLogs, _ = svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}, Duration: &duration})
-	assert.Equal(3, len(podLogs.Entries))
+	podLogs = callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{PodLogOptions: core_v1.PodLogOptions{Container: "details"}, Duration: &duration})
+	require.Equal(3, len(podLogs.Entries))
 	assert.Equal("INFO #1 Log Message", podLogs.Entries[0].Message)
 	assert.Equal("WARN #2 Log Message", podLogs.Entries[1].Message)
 	assert.Equal("#3 Log Message", podLogs.Entries[2].Message)
 }
 
-func TestGetPodLogsTailLinesAndDurations(t *testing.T) {
+func TestGetPodLogsMaxLinesAndDurations(t *testing.T) {
 	assert := assert.New(t)
+	require := require.New(t)
 	conf := config.NewConfig()
-	config.Set(conf)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(FakePodLogsSyncedWithDeployments(), nil)
-	k8s.On("IsOpenShift").Return(false)
+	proj := &osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}}
+	k8s := &logStreamer{
+		logs:            FakePodLogsSyncedWithDeployments().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(proj),
+	}
+	svc := setupWorkloadService(k8s, conf)
 
-	svc := setupWorkloadService(k8s)
-
-	tailLines := int64(2)
+	maxLines := 2
 	duration, _ := time.ParseDuration("2h")
-	podLogs, _ := svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{Duration: &duration, PodLogOptions: core_v1.PodLogOptions{Container: "details", TailLines: &tailLines}})
-	assert.Equal(2, len(podLogs.Entries))
-	assert.Equal("WARN #2 Log Message", podLogs.Entries[0].Message)
-	assert.Equal("#3 Log Message", podLogs.Entries[1].Message)
+	podLogs := callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{Duration: &duration, PodLogOptions: core_v1.PodLogOptions{Container: "details"}, MaxLines: &maxLines})
+	require.Equal(2, len(podLogs.Entries))
+	assert.Equal("INFO #1 Log Message", podLogs.Entries[0].Message)
+	assert.Equal("WARN #2 Log Message", podLogs.Entries[1].Message)
+	assert.True(podLogs.LinesTruncated)
 
-	tailLines = int64(1)
-	duration, _ = time.ParseDuration("2h")
-	podLogs, _ = svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{Duration: &duration, PodLogOptions: core_v1.PodLogOptions{Container: "details", TailLines: &tailLines}})
-	assert.Equal(1, len(podLogs.Entries))
-	assert.Equal("#3 Log Message", podLogs.Entries[0].Message)
+	// Re-setup mocks
+	k8s = &logStreamer{
+		logs:            FakePodLogsSyncedWithDeployments().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(proj),
+	}
+	svc = setupWorkloadService(k8s, conf)
 
-	tailLines = int64(1)
+	maxLines = 3
 	duration, _ = time.ParseDuration("3h")
-	podLogs, _ = svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{Duration: &duration, PodLogOptions: core_v1.PodLogOptions{Container: "details", TailLines: &tailLines}})
-	assert.Equal(1, len(podLogs.Entries))
-	assert.Equal("#4 Log error Message", podLogs.Entries[0].Message)
+	podLogs = callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{Duration: &duration, PodLogOptions: core_v1.PodLogOptions{Container: "details"}, MaxLines: &maxLines})
+	require.Equal(3, len(podLogs.Entries))
+	assert.Equal("INFO #1 Log Message", podLogs.Entries[0].Message)
+	assert.Equal("WARN #2 Log Message", podLogs.Entries[1].Message)
+	assert.Equal("#3 Log Message", podLogs.Entries[2].Message)
+	assert.False(podLogs.LinesTruncated)
 }
 
 func TestGetPodLogsProxy(t *testing.T) {
 	assert := assert.New(t)
+	require := require.New(t)
 	conf := config.NewConfig()
-	config.Set(conf)
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(FakePodLogsProxy(), nil)
-	k8s.On("IsOpenShift").Return(false)
+	proj := &osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}}
+	k8s := &logStreamer{
+		logs:            FakePodLogsProxy().Logs,
+		ClientInterface: kubetest.NewFakeK8sClient(proj),
+	}
+	svc := setupWorkloadService(k8s, conf)
 
-	svc := setupWorkloadService(k8s)
-
-	tailLines := int64(2)
+	maxLines := 2
 	duration, _ := time.ParseDuration("2h")
-	podLogs, _ := svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{Duration: &duration, IsProxy: true, PodLogOptions: core_v1.PodLogOptions{Container: "details", TailLines: &tailLines}})
-	assert.Equal(1, len(podLogs.Entries))
+	podLogs := callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{Duration: &duration, IsProxy: true, PodLogOptions: core_v1.PodLogOptions{Container: "details"}, MaxLines: &maxLines})
+	require.Equal(1, len(podLogs.Entries))
 	entry := podLogs.Entries[0]
 	assert.Equal(`[2021-02-01T21:34:35.533Z] "GET /hotels/Ljubljana HTTP/1.1" 200 - via_upstream - "-" 0 99 14 14 "-" "Go-http-client/1.1" "7e7e2dd0-0a96-4535-950b-e303805b7e27" "hotels.travel-agency:8000" "127.0.2021-02-01T21:34:38.761055140Z 0.1:8000" inbound|8000|| 127.0.0.1:33704 10.129.0.72:8000 10.128.0.79:39880 outbound_.8000_._.hotels.travel-agency.svc.cluster.local default`, entry.Message)
-	assert.Equal("2021-02-01 21:34:35", entry.Timestamp)
+	assert.Equal("2021-02-01 21:34:35.533", entry.Timestamp)
 	assert.NotNil(entry.AccessLog)
 	assert.Equal("GET", entry.AccessLog.Method)
 	assert.Equal("200", entry.AccessLog.StatusCode)
 	assert.Equal("2021-02-01T21:34:35.533Z", entry.AccessLog.Timestamp)
-	assert.Equal(int64(1612215275), entry.TimestampUnix)
+	assert.Equal(int64(1612215275533), entry.TimestampUnix)
 }
 
 func TestDuplicatedControllers(t *testing.T) {
 	assert := assert.New(t)
-
-	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDuplicatedDeployments(), nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDuplicatedReplicaSets(), nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakeDuplicatedStatefulSets(), nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsSyncedWithDuplicated(), nil)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodSyncedWithDeployments(), nil)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(FakePodLogsSyncedWithDeployments(), nil)
-
-	notfound := fmt.Errorf("not found")
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&FakeDuplicatedDeployments()[0], nil)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&FakeDuplicatedStatefulSets()[0], nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
+	require := require.New(t)
 
 	// Disabling CustomDashboards on Workload details testing
-	conf := config.Get()
+	conf := config.NewConfig()
 	conf.ExternalServices.CustomDashboards.Enabled = false
-	config.Set(conf)
 
-	svc := setupWorkloadService(k8s)
+	// Setup mocks
+	kubeObjs := []runtime.Object{
+		FakePodSyncedWithDeployments(),
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range FakeDuplicatedDeployments() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakeDuplicatedReplicaSets() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakeDuplicatedStatefulSets() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range FakePodsSyncedWithDuplicated() {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, conf)
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
 	workloads := workloadList.Workloads
 
 	criteria = WorkloadCriteria{Namespace: "Namespace", WorkloadName: "duplicated-v1", WorkloadType: "", IncludeServices: false}
-	workload, _ := svc.GetWorkload(context.TODO(), criteria)
+	workload, err := svc.GetWorkload(context.TODO(), criteria)
 
+	require.NoError(err)
 	assert.Equal(workloads[0].Type, workload.Type)
 }
 
 func TestGetWorkloadListFromGenericPodController(t *testing.T) {
 	assert := assert.New(t)
+	require := require.New(t)
 
 	pods := FakePodsSyncedWithDeployments()
 
@@ -749,43 +754,32 @@ func TestGetWorkloadListFromGenericPodController(t *testing.T) {
 	}
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.ReplicaSet{}, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods, nil)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods[0], nil)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(pods, nil)
-
-	notfound := fmt.Errorf("not found")
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range pods {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
 	// Disabling CustomDashboards on Workload details testing
 	conf := config.Get()
 	conf.ExternalServices.CustomDashboards.Enabled = false
 	config.Set(conf)
 
-	svc := setupWorkloadService(k8s)
-
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
 	workloads := workloadList.Workloads
 
 	criteria = WorkloadCriteria{Namespace: "Namespace", WorkloadName: owner.Name, WorkloadType: "", IncludeServices: false}
-	workload, _ := svc.GetWorkload(context.TODO(), criteria)
+	workload, err := svc.GetWorkload(context.TODO(), criteria)
 
-	assert.Equal(len(workloads), 1)
-	assert.NotNil(workload)
+	require.NoError(err)
+	require.Equal(len(workloads), 1)
+	require.NotNil(workload)
 
 	assert.Equal(len(pods), len(workload.Pods))
 }
@@ -793,39 +787,30 @@ func TestGetWorkloadListFromGenericPodController(t *testing.T) {
 func TestGetWorkloadListKindsWithSameName(t *testing.T) {
 	assert := assert.New(t)
 
+	// Disabling CustomDashboards on Workload details testing
+	conf := config.NewConfig()
+	conf.ExternalServices.CustomDashboards.Enabled = false
+
 	rs := FakeRSSyncedWithPods()
 	pods := FakePodsSyncedWithDeployments()
 	pods[0].OwnerReferences[0].APIVersion = "shiny.new.apps/v1"
 	pods[0].OwnerReferences[0].Kind = "ReplicaSet"
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(rs, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods, nil)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods[0], nil)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(pods, nil)
-
-	notfound := fmt.Errorf("not found")
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
-
-	// Disabling CustomDashboards on Workload details testing
-	conf := config.Get()
-	conf.ExternalServices.CustomDashboards.Enabled = false
-	config.Set(conf)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range rs {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range pods {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, conf)
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -836,6 +821,10 @@ func TestGetWorkloadListKindsWithSameName(t *testing.T) {
 
 func TestGetWorkloadListRSWithoutPrefix(t *testing.T) {
 	assert := assert.New(t)
+
+	// Disabling CustomDashboards on Workload details testing
+	conf := config.NewConfig()
+	conf.ExternalServices.CustomDashboards.Enabled = false
 
 	rs := FakeRSSyncedWithPods()
 	// Doesn't matter what the type is as long as kiali doesn't recognize it as a workload.
@@ -853,33 +842,20 @@ func TestGetWorkloadListRSWithoutPrefix(t *testing.T) {
 	pods := FakePodsSyncedWithDeployments()
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(rs, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods, nil)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods[0], nil)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(pods, nil)
-
-	notfound := fmt.Errorf("not found")
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
-
-	// Disabling CustomDashboards on Workload details testing
-	conf := config.Get()
-	conf.ExternalServices.CustomDashboards.Enabled = false
-	config.Set(conf)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range rs {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range pods {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, conf)
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -890,6 +866,11 @@ func TestGetWorkloadListRSWithoutPrefix(t *testing.T) {
 
 func TestGetWorkloadListRSOwnedByCustom(t *testing.T) {
 	assert := assert.New(t)
+	require := require.New(t)
+
+	// Disabling CustomDashboards on Workload details testing
+	conf := config.NewConfig()
+	conf.ExternalServices.CustomDashboards.Enabled = false
 
 	replicaSets := FakeRSSyncedWithPods()
 
@@ -912,33 +893,20 @@ func TestGetWorkloadListRSOwnedByCustom(t *testing.T) {
 	pods := FakePodsSyncedWithDeployments()
 
 	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
-	k8s.On("IsOpenShift").Return(true)
-	k8s.On("GetProject", mock.AnythingOfType("string")).Return(&osproject_v1.Project{}, nil)
-	k8s.On("GetDeployments", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfigs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]osapps_v1.DeploymentConfig{}, nil)
-	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(replicaSets, nil)
-	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]core_v1.ReplicationController{}, nil)
-	k8s.On("GetStatefulSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.StatefulSet{}, nil)
-	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
-	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
-	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods, nil)
-	k8s.On("GetPod", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(pods[0], nil)
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(FakePodsSyncedWithDeployments(), nil)
-
-	notfound := fmt.Errorf("not found")
-	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.Deployment{}, nil)
-	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osapps_v1.DeploymentConfig{}, notfound)
-	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.StatefulSet{}, nil)
-	k8s.On("GetDaemonSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]apps_v1.DaemonSet{}, nil)
-	k8s.On("GetDaemonSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&apps_v1.DaemonSet{}, notfound)
-
-	// Disabling CustomDashboards on Workload details testing
-	conf := config.Get()
-	conf.ExternalServices.CustomDashboards.Enabled = false
-	config.Set(conf)
-
-	svc := setupWorkloadService(k8s)
+	kubeObjs := []runtime.Object{
+		&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}},
+	}
+	for _, obj := range replicaSets {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	for _, obj := range pods {
+		o := obj
+		kubeObjs = append(kubeObjs, &o)
+	}
+	k8s := kubetest.NewFakeK8sClient(kubeObjs...)
+	k8s.OpenShift = true
+	svc := setupWorkloadService(k8s, conf)
 
 	criteria := WorkloadCriteria{Namespace: "Namespace", IncludeIstioResources: false, IncludeHealth: false}
 	workloadList, _ := svc.GetWorkloadList(context.TODO(), criteria)
@@ -947,19 +915,18 @@ func TestGetWorkloadListRSOwnedByCustom(t *testing.T) {
 	criteria = WorkloadCriteria{Namespace: "Namespace", WorkloadName: owner.Name, WorkloadType: "", IncludeServices: false}
 	workload, _ := svc.GetWorkload(context.TODO(), criteria)
 
-	assert.Equal(len(workloads), 1)
-	assert.NotNil(workload)
+	require.Equal(len(workloads), 1)
+	assert.Nil(workload)
 
-	assert.Equal(len(pods), len(workload.Pods))
+	criteria.WorkloadName = workloads[0].Name
+	workload, _ = svc.GetWorkload(context.TODO(), criteria)
+
+	assert.NotNil(workload)
 }
 
 func TestGetPodLogsWithoutAccessLogs(t *testing.T) {
 	assert := assert.New(t)
-	conf := config.NewConfig()
-	config.Set(conf)
 
-	// Setup mocks
-	k8s := new(kubetest.K8SClientMock)
 	const logs = `2021-10-05T00:32:40.309334Z     debug   envoy http      [C57][S7648448766062793478] request end stream
 2021-10-05T00:32:40.309425Z     debug   envoy router    [C57][S7648448766062793478] cluster 'inbound|9080||' match for URL '/details/0'
 2021-10-05T00:32:40.309438Z     debug   envoy upstream  Using existing host 172.17.0.12:9080.
@@ -968,12 +935,13 @@ func TestGetPodLogsWithoutAccessLogs(t *testing.T) {
 2021-10-05T00:32:40.309457Z     ':path', '/details/0'
 2021-10-05T00:32:40.309457Z     ':method', 'GET'
 2021-10-05T00:32:40.309457Z     ':scheme', 'http'`
-	k8s.On("GetPodLogs", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.Anything).Return(&kubernetes.PodLogs{Logs: logs}, nil)
-	k8s.On("IsOpenShift").Return(false)
+	k8s := &logStreamer{
+		logs:            logs,
+		ClientInterface: kubetest.NewFakeK8sClient(&osproject_v1.Project{ObjectMeta: v1.ObjectMeta{Name: "Namespace"}}),
+	}
+	svc := setupWorkloadService(k8s, config.NewConfig())
 
-	svc := setupWorkloadService(k8s)
-
-	podLogs, _ := svc.GetPodLogs("Namespace", "details-v1-3618568057-dnkjp", &LogOptions{IsProxy: true, PodLogOptions: core_v1.PodLogOptions{Container: "istio-proxy"}})
+	podLogs := callStreamPodLogs(svc, "Namespace", "details-v1-3618568057-dnkjp", &LogOptions{IsProxy: true, PodLogOptions: core_v1.PodLogOptions{Container: "istio-proxy"}})
 
 	assert.Equal(8, len(podLogs.Entries))
 	for _, entry := range podLogs.Entries {

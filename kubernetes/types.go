@@ -3,11 +3,14 @@ package kubernetes
 import (
 	"time"
 
+	extentions_v1alpha1 "istio.io/client-go/pkg/apis/extensions/v1alpha1"
 	networking_v1alpha3 "istio.io/client-go/pkg/apis/networking/v1alpha3"
 	networking_v1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 	security_v1beta "istio.io/client-go/pkg/apis/security/v1beta1"
+	"istio.io/client-go/pkg/apis/telemetry/v1alpha1"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8s_networking_v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
 const (
@@ -51,6 +54,24 @@ const (
 	WorkloadGroups    = "workloadgroups"
 	WorkloadGroupType = "WorkloadGroup"
 
+	WasmPlugins    = "wasmplugins"
+	WasmPluginType = "WasmPlugin"
+
+	Telemetries   = "telemetries"
+	TelemetryType = "Telemetry"
+
+	// K8s Networking
+
+	K8sGateways    = "k8sgateways"
+	K8sGatewayType = "K8sGateway"
+	// K8sActualGatewayType There is a naming conflict between Istio and K8s Gateways, keeping here an actual type to show in YAML editor
+	K8sActualGatewayType = "Gateway"
+
+	K8sHTTPRoutes    = "k8shttproutes"
+	K8sHTTPRouteType = "K8sHTTPRoute"
+	// K8sActualHTTPRouteType There is a naming conflict between Istio and K8s Gateways, keeping here an actual type to show in YAML editor
+	K8sActualHTTPRouteType = "HTTPRoute"
+
 	// Authorization PeerAuthentications
 	AuthorizationPolicies     = "authorizationpolicies"
 	AuthorizationPoliciesType = "AuthorizationPolicy"
@@ -71,6 +92,18 @@ var (
 	}
 	ApiNetworkingVersionV1Alpha3 = NetworkingGroupVersionV1Alpha3.Group + "/" + NetworkingGroupVersionV1Alpha3.Version
 
+	K8sNetworkingGroupVersionV1Alpha2 = schema.GroupVersion{
+		Group:   "gateway.networking.k8s.io",
+		Version: "v1alpha2",
+	}
+	K8sApiNetworkingVersionV1Alpha2 = K8sNetworkingGroupVersionV1Alpha2.Group + "/" + K8sNetworkingGroupVersionV1Alpha2.Version
+
+	K8sNetworkingGroupVersionV1Beta1 = schema.GroupVersion{
+		Group:   "gateway.networking.k8s.io",
+		Version: "v1beta1",
+	}
+	K8sApiNetworkingVersionV1Beta1 = K8sNetworkingGroupVersionV1Beta1.Group + "/" + K8sNetworkingGroupVersionV1Beta1.Version
+
 	NetworkingGroupVersionV1Beta1 = schema.GroupVersion{
 		Group:   "networking.istio.io",
 		Version: "v1beta1",
@@ -83,6 +116,18 @@ var (
 	}
 	ApiSecurityVersion = SecurityGroupVersion.Group + "/" + SecurityGroupVersion.Version
 
+	ExtensionGroupVersionV1Alpha1 = schema.GroupVersion{
+		Group:   "extensions.istio.io",
+		Version: "v1alpha1",
+	}
+	ApiExtensionV1Alpha1 = ExtensionGroupVersionV1Alpha1.Group + "/" + ExtensionGroupVersionV1Alpha1.Version
+
+	TelemetryGroupV1Alpha1 = schema.GroupVersion{
+		Group:   "telemetry.istio.io",
+		Version: "v1alpha1",
+	}
+	ApiTelemetryV1Alpha1 = TelemetryGroupV1Alpha1.Group + "/" + TelemetryGroupV1Alpha1.Version
+
 	PluralType = map[string]string{
 		// Networking
 		Gateways:         GatewayType,
@@ -93,6 +138,12 @@ var (
 		WorkloadEntries:  WorkloadEntryType,
 		WorkloadGroups:   WorkloadGroupType,
 		EnvoyFilters:     EnvoyFilterType,
+		WasmPlugins:      WasmPluginType,
+		Telemetries:      TelemetryType,
+
+		// K8s Networking Gateways
+		K8sGateways:   K8sGatewayType,
+		K8sHTTPRoutes: K8sHTTPRouteType,
 
 		// Security
 		AuthorizationPolicies:  AuthorizationPoliciesType,
@@ -101,14 +152,20 @@ var (
 	}
 
 	ResourceTypesToAPI = map[string]string{
-		DestinationRules:       NetworkingGroupVersionV1Beta1.Group,
-		EnvoyFilters:           NetworkingGroupVersionV1Alpha3.Group,
-		Gateways:               NetworkingGroupVersionV1Beta1.Group,
-		ServiceEntries:         NetworkingGroupVersionV1Beta1.Group,
-		Sidecars:               NetworkingGroupVersionV1Beta1.Group,
-		VirtualServices:        NetworkingGroupVersionV1Beta1.Group,
-		WorkloadEntries:        NetworkingGroupVersionV1Beta1.Group,
-		WorkloadGroups:         NetworkingGroupVersionV1Beta1.Group,
+		DestinationRules: NetworkingGroupVersionV1Beta1.Group,
+		EnvoyFilters:     NetworkingGroupVersionV1Alpha3.Group,
+		Gateways:         NetworkingGroupVersionV1Beta1.Group,
+		ServiceEntries:   NetworkingGroupVersionV1Beta1.Group,
+		Sidecars:         NetworkingGroupVersionV1Beta1.Group,
+		VirtualServices:  NetworkingGroupVersionV1Beta1.Group,
+		WorkloadEntries:  NetworkingGroupVersionV1Beta1.Group,
+		WorkloadGroups:   NetworkingGroupVersionV1Beta1.Group,
+		WasmPlugins:      ExtensionGroupVersionV1Alpha1.Group,
+		Telemetries:      TelemetryGroupV1Alpha1.Group,
+
+		K8sGateways:   K8sNetworkingGroupVersionV1Alpha2.Group,
+		K8sHTTPRoutes: K8sNetworkingGroupVersionV1Alpha2.Group,
+
 		AuthorizationPolicies:  SecurityGroupVersion.Group,
 		PeerAuthentications:    SecurityGroupVersion.Group,
 		RequestAuthentications: SecurityGroupVersion.Group,
@@ -122,15 +179,15 @@ type IstioMeshConfig struct {
 
 // MTLSDetails is a wrapper to group all Istio objects related to non-local mTLS configurations
 type MTLSDetails struct {
-	DestinationRules        []networking_v1beta1.DestinationRule `json:"destinationrules"`
-	MeshPeerAuthentications []security_v1beta.PeerAuthentication `json:"meshpeerauthentications"`
-	PeerAuthentications     []security_v1beta.PeerAuthentication `json:"peerauthentications"`
-	EnabledAutoMtls         bool                                 `json:"enabledautomtls"`
+	DestinationRules        []*networking_v1beta1.DestinationRule `json:"destinationrules"`
+	MeshPeerAuthentications []*security_v1beta.PeerAuthentication `json:"meshpeerauthentications"`
+	PeerAuthentications     []*security_v1beta.PeerAuthentication `json:"peerauthentications"`
+	EnabledAutoMtls         bool                                  `json:"enabledautomtls"`
 }
 
 // RBACDetails is a wrapper for objects related to Istio RBAC (Role Based Access Control)
 type RBACDetails struct {
-	AuthorizationPolicies []security_v1beta.AuthorizationPolicy `json:"authorizationpolicies"`
+	AuthorizationPolicies []*security_v1beta.AuthorizationPolicy `json:"authorizationpolicies"`
 }
 
 type ProxyStatus struct {
@@ -157,18 +214,25 @@ type SyncStatus struct {
 // Resources not used (i.e. EnvoyFilters) are not added, those will require update them in the future
 type RegistryConfiguration struct {
 	// Networking
-	DestinationRules []networking_v1beta1.DestinationRule
-	EnvoyFilters     []networking_v1alpha3.EnvoyFilter
-	Gateways         []networking_v1beta1.Gateway
-	ServiceEntries   []networking_v1beta1.ServiceEntry
-	Sidecars         []networking_v1beta1.Sidecar
-	VirtualServices  []networking_v1beta1.VirtualService
-	WorkloadEntries  []networking_v1beta1.WorkloadEntry
-	WorkloadGroups   []networking_v1beta1.WorkloadGroup
+	DestinationRules []*networking_v1beta1.DestinationRule
+	EnvoyFilters     []*networking_v1alpha3.EnvoyFilter
+	Gateways         []*networking_v1beta1.Gateway
+	ServiceEntries   []*networking_v1beta1.ServiceEntry
+	Sidecars         []*networking_v1beta1.Sidecar
+	VirtualServices  []*networking_v1beta1.VirtualService
+	WorkloadEntries  []*networking_v1beta1.WorkloadEntry
+	WorkloadGroups   []*networking_v1beta1.WorkloadGroup
+	WasmPlugins      []*extentions_v1alpha1.WasmPlugin
+	Telemetries      []*v1alpha1.Telemetry
+
+	// K8s Networking Gateways
+	K8sGateways   []*k8s_networking_v1alpha2.Gateway
+	K8sHTTPRoutes []*k8s_networking_v1alpha2.HTTPRoute
+
 	// Security
-	AuthorizationPolicies  []security_v1beta.AuthorizationPolicy
-	PeerAuthentications    []security_v1beta.PeerAuthentication
-	RequestAuthentications []security_v1beta.RequestAuthentication
+	AuthorizationPolicies  []*security_v1beta.AuthorizationPolicy
+	PeerAuthentications    []*security_v1beta.PeerAuthentication
+	RequestAuthentications []*security_v1beta.RequestAuthentication
 }
 
 type RegistryEndpoint struct {

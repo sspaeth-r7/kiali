@@ -2,6 +2,7 @@ import Namespace from './Namespace';
 import { ServicePort } from './ServiceInfo';
 import { ProxyStatus } from './Health';
 import { TimeInSeconds } from './Common';
+import { KIALI_RELATED_LABEL, KIALI_WIZARD_LABEL } from "components/IstioWizards/WizardActions";
 import { PFColorVal } from 'components/Pf/PfColors';
 
 // Common types
@@ -242,6 +243,7 @@ export type LogEntry = {
 
 export interface PodLogs {
   entries: LogEntry[];
+  linesTruncated?: boolean;
 }
 
 export interface EnvoyProxyDump {
@@ -553,6 +555,30 @@ export interface DestinationRule extends IstioObject {
   spec: DestinationRuleSpec;
 }
 
+export class DestinationRuleC implements DestinationRule {
+  metadata: K8sMetadata = {name: ''};
+  spec: DestinationRuleSpec = {};
+
+  constructor(dr: DestinationRule) {
+    Object.assign(this, dr);
+  }
+
+  static fromDrArray(drs: DestinationRule[]) {
+    return drs.map(item => new DestinationRuleC(item));
+  }
+
+  hasPeerAuthentication(): string {
+    if (!!this.metadata && !!this.metadata.annotations && this.metadata.annotations[KIALI_RELATED_LABEL] !== undefined) {
+      const anno = this.metadata.annotations[KIALI_RELATED_LABEL];
+      const parts = anno.split('/');
+      if (parts.length > 1) {
+        return parts[1];
+      }
+    }
+    return '';
+  }
+}
+
 // Virtual Service
 
 // 1.6
@@ -629,6 +655,58 @@ export interface VirtualService extends IstioObject {
   spec: VirtualServiceSpec;
 }
 
+export function getWizardUpdateLabel(vs: VirtualService | VirtualService[] | null, k8sr: K8sHTTPRoute | K8sHTTPRoute[] | null) {
+  let label = getVirtualServiceUpdateLabel(vs)
+  if (label === '') {
+    label = getK8sHTTPRouteUpdateLabel(k8sr)
+  }
+  return label
+}
+
+export function getVirtualServiceUpdateLabel(vs: VirtualService | VirtualService[] | null) {
+  if (!vs) {
+    return '';
+  }
+
+  let virtualService: VirtualService | null = null;
+  if ('length' in vs) {
+    if (vs.length === 1) {
+      virtualService = vs[0];
+    }
+  } else {
+    virtualService = vs;
+  }
+
+  if (virtualService && virtualService.metadata.labels &&
+    virtualService.metadata.labels[KIALI_WIZARD_LABEL]) {
+    return virtualService.metadata.labels[KIALI_WIZARD_LABEL];
+  } else {
+    return '';
+  }
+}
+
+export function getK8sHTTPRouteUpdateLabel(k8sr: K8sHTTPRoute | K8sHTTPRoute[] | null) {
+  if (!k8sr) {
+    return '';
+  }
+
+  let k8sHTTPRoute: K8sHTTPRoute | null = null;
+  if ('length' in k8sr) {
+    if (k8sr.length === 1) {
+      k8sHTTPRoute = k8sr[0];
+    }
+  } else {
+    k8sHTTPRoute = k8sr;
+  }
+
+  if (k8sHTTPRoute && k8sHTTPRoute.metadata.labels &&
+    k8sHTTPRoute.metadata.labels[KIALI_WIZARD_LABEL]) {
+    return k8sHTTPRoute.metadata.labels[KIALI_WIZARD_LABEL];
+  } else {
+    return '';
+  }
+}
+
 export interface K8sOwnerReference {
   apiVersion?: string;
   kind?: string;
@@ -647,6 +725,122 @@ export interface GatewaySpec {
 // 1.6
 export interface Gateway extends IstioObject {
   spec: GatewaySpec;
+}
+
+export function getGatewaysAsList(gws: Gateway[]): string[] {
+  return gws.map(gateway => gateway.metadata.namespace + '/' + gateway.metadata.name).sort();
+}
+
+export function getK8sGatewaysAsList(k8sGws: K8sGateway[]): string[] {
+  if (k8sGws) {
+    return k8sGws.map(gateway => gateway.metadata.namespace + '/' + gateway.metadata.name).sort();
+  } else {
+    return []
+  }
+}
+
+// K8s Gateway API https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api/
+
+export interface Listener {
+  name: string;
+  hostname: string;
+  port: number;
+  protocol: string;
+  allowedRoutes: AllowedRoutes;
+}
+
+export interface Address {
+  type: string;
+  value: string;
+}
+
+export interface AllowedRoutes {
+  namespaces: FromNamespaces;
+}
+
+export interface LabelSelector {
+  matchLabels: { [key: string]: string };
+}
+
+export interface FromNamespaces {
+  from: string;
+  selector: LabelSelector;
+}
+
+export interface ParentRef {
+  name: string;
+  namespace: string;
+}
+
+export interface K8sGatewaySpec {
+  listeners?: Listener[];
+  addresses?: Address[];
+  gatewayClassName: string;
+}
+
+export interface K8sGateway extends IstioObject {
+  spec: K8sGatewaySpec;
+}
+
+export interface K8sHTTPRouteSpec {
+  parentRefs?: ParentRef[];
+  hostnames?: string[];
+  rules?: K8sRouteRule[];
+}
+
+export interface K8sRouteRule {
+  matches?:     K8sHTTPRouteMatch[];
+  filters?:     K8sHTTPRouteFilter[];
+  backendRefs?: K8sRouteBackendRef[];
+}
+
+export interface K8sRouteBackendRef {
+  name:       string;
+  weight?:    number;
+  port?:      number;
+  namespace?: string;
+  filters?:   K8sHTTPRouteFilter[];
+}
+
+export interface K8sHTTPRouteFilter {
+  requestRedirect?: K8sHTTPRouteRequestRedirect;
+  requestHeaderModifier?: K8sHTTPHeaderFilter;
+  requestMirror?: K8sHTTPRequestMirrorFilter;
+  type?:            string;
+}
+
+export interface K8sHTTPRequestMirrorFilter {
+  backendRef?: K8sRouteBackendRef;
+}
+
+export interface K8sHTTPHeaderFilter {
+  set?: HTTPHeader[];
+  add?: HTTPHeader[];
+  remove?: string[];
+}
+
+export interface K8sHTTPRouteRequestRedirect {
+  scheme?: string;
+  hostname?: string;
+  port?: number;
+  statusCode?: number;
+}
+
+export interface K8sHTTPRouteMatch {
+  path?: HTTPMatch;
+  headers?: HTTPMatch[];
+  queryParams?: HTTPMatch[];
+  method?: string;
+}
+
+export interface HTTPMatch {
+  type?:  string;
+  name?: string;
+  value?: string;
+}
+
+export interface K8sHTTPRoute extends IstioObject {
+  spec: K8sHTTPRouteSpec;
 }
 
 // Sidecar resource https://preliminary.istio.io/docs/reference/config/networking/v1alpha3/sidecar
@@ -752,6 +946,24 @@ export interface ServiceEntrySpec {
 // 1.6
 export interface ServiceEntry extends IstioObject {
   spec: ServiceEntrySpec;
+}
+
+export interface WasmPlugin extends IstioObject {
+  spec: WasmPluginSpec;
+}
+
+export interface WasmPluginSpec extends IstioObject {
+  workloadSelector?: WorkloadSelector;
+  url: string;
+  pluginName: string;
+}
+
+export interface Telemetry extends IstioObject {
+  spec: TelemetrySpec;
+}
+
+export interface TelemetrySpec extends IstioObject {
+  workloadSelector?: WorkloadSelector;
 }
 
 export interface Endpoint {
@@ -1060,4 +1272,11 @@ export interface APIKey {
   query?: string;
   header?: string;
   cookie?: string;
+}
+
+export interface CanaryUpgradeStatus {
+  currentVersion: string;
+  upgradeVersion: string;
+  migratedNamespaces: string[];
+  pendingNamespaces: string[];
 }

@@ -25,7 +25,7 @@ type IstioMetricsQuery struct {
 	Service         string
 	Direction       string // outbound | inbound
 	RequestProtocol string // e.g. http | grpc
-	Reporter        string // source | destination, defaults to source if not provided
+	Reporter        string // source | destination | both, defaults to source if not provided
 	Aggregate       string
 	AggregateValue  string
 }
@@ -108,6 +108,17 @@ func (q *MetricsStatsQuery) GenKey() string {
 }
 func (t *Target) GenKey() string {
 	return fmt.Sprintf("%s:%s:%s", t.Namespace, t.Kind, t.Name)
+}
+
+// ControlPlaneMetricsQuery holds query parameters for a control plane metrics query
+type ControlPlaneMetricsQuery struct {
+	prometheus.RangeQuery
+}
+
+// FillDefaults fills the struct with default parameters
+func (q *ControlPlaneMetricsQuery) FillDefaults() {
+	q.RangeQuery.FillDefaults()
+	q.Quantiles = []string{"0.99"}
 }
 
 //////////////////////////////////////////////////////////////////////////////

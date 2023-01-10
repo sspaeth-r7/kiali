@@ -1,6 +1,5 @@
 import { createSelector } from 'reselect';
 import { KialiAppState } from './Store';
-import { isMTLSEnabled } from '../types/TLSStatus';
 import { TimeRange } from '../types/Common';
 // These memoized selectors are from Redux Reselect package
 
@@ -67,10 +66,6 @@ const replayQueryTime = (state: KialiAppState) => state.userSettings.replayQuery
 
 export const replayQueryTimeSelector = createIdentitySelector(replayQueryTime);
 
-const lastRefreshAt = (state: KialiAppState) => state.globalState.lastRefreshAt;
-
-export const lastRefreshAtSelector = createIdentitySelector(lastRefreshAt);
-
 const showIdleNodes = (state: KialiAppState) => state.graph.toolbarState.showIdleNodes;
 
 export const showIdleNodesSelector = createIdentitySelector(showIdleNodes);
@@ -83,7 +78,11 @@ const meshwideMTLSStatus = (state: KialiAppState) => state.meshTLSStatus.status;
 
 export const meshWideMTLSStatusSelector = createIdentitySelector(meshwideMTLSStatus);
 
-const meshwideMTLSEnabled = (state: KialiAppState) => isMTLSEnabled(state.meshTLSStatus.status);
+const minTLSVersion = (state: KialiAppState) => state.meshTLSStatus.minTLS;
+
+export const minTLSVersionSelector = createIdentitySelector(minTLSVersion);
+
+const meshwideMTLSEnabled = (state: KialiAppState) => state.meshTLSStatus.autoMTLSEnabled;
 
 export const meshWideMTLSEnabledSelector = createIdentitySelector(meshwideMTLSEnabled);
 

@@ -13,7 +13,7 @@ interface DeploymentConfig {
 }
 
 interface IstioAnnotations {
-  // for non-Maistra environments, this can also be the name of the pod label, too
+  // this could also be the name of the pod label, both label and annotation are supported
   istioInjectionAnnotation: string;
 }
 
@@ -60,6 +60,20 @@ interface KialiFeatureFlags {
   uiDefaults: UIDefaults;
 }
 
+// Not based exactly on Kiali configuration but rather whether things like prometheus config
+// allow for certain Kiali features. True means the feature is crippled, false means supported.
+export interface KialiCrippledFeatures {
+  requestSize: boolean;
+  requestSizeAverage: boolean;
+  requestSizePercentiles: boolean;
+  responseSize: boolean;
+  responseSizeAverage: boolean;
+  responseSizePercentiles: boolean;
+  responseTime: boolean;
+  responseTimeAverage: boolean;
+  responseTimePercentiles: boolean;
+}
+
 interface IstioCanaryRevision {
   current: string;
   upgrade: string;
@@ -95,9 +109,12 @@ export interface ToleranceConfig {
 */
 
 export interface ServerConfig {
+  accessibleNamespaces: Array<string>;
+  authStrategy: string;
   clusterInfo?: ClusterInfo;
   clusters: { [key: string]: MeshCluster };
   deployment: DeploymentConfig;
+  gatewayAPIEnabled: boolean;
   healthConfig: HealthConfig;
   installationTag?: string;
   istioAnnotations: IstioAnnotations;
@@ -106,6 +123,7 @@ export interface ServerConfig {
   istioNamespace: string;
   istioLabels: { [key in IstioLabelKey]: string };
   kialiFeatureFlags: KialiFeatureFlags;
+  logLevel: string,
   prometheus: {
     globalScrapeInterval?: DurationInSeconds;
     storageTsdbRetention?: DurationInSeconds;

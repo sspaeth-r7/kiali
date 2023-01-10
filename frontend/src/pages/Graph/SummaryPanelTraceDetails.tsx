@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { Link } from 'react-router-dom';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
 import { style } from 'typestyle';
 import { Tooltip, Button, ButtonVariant, pluralize, SelectOption } from '@patternfly/react-core';
 import {
@@ -15,7 +14,6 @@ import {
 import { URLParam } from '../../app/History';
 import { JaegerTrace, RichSpanData, EnvoySpanInfo, OpenTracingHTTPInfo, OpenTracingTCPInfo } from 'types/JaegerInfo';
 import { KialiAppState } from 'store/Store';
-import { KialiAppAction } from 'actions/KialiAppAction';
 import { JaegerThunkActions } from 'actions/JaegerThunkActions';
 import { GraphActions } from 'actions/GraphActions';
 import { PFColors } from 'components/Pf/PfColors';
@@ -27,16 +25,22 @@ import { FormattedTraceInfo, shortIDStyle } from 'components/JaegerIntegration/J
 import SimplerSelect from 'components/SimplerSelect';
 import { summaryFont, summaryTitle } from './SummaryPanelCommon';
 import { NodeParamsType, GraphType } from 'types/Graph';
+import { KialiDispatch } from "types/Redux";
 import { bindActionCreators } from 'redux';
 import responseFlags from 'utils/ResponseFlags';
+import {isParentKiosk, kioskContextMenuAction} from "../../components/Kiosk/KioskActions";
 
-type Props = {
+type ReduxProps = {
+  close: () => void;
+  kiosk: string;
+  setNode: (node?: NodeParamsType) => void;
+};
+
+type Props = ReduxProps & {
   trace: JaegerTrace;
   node: any;
   graphType: GraphType;
   jaegerURL?: string;
-  close: () => void;
-  setNode: (node?: NodeParamsType) => void;
 };
 
 type State = {
@@ -123,7 +127,7 @@ class SummaryPanelTraceDetails extends React.Component<Props, State> {
           <span>Trace</span>
           <span className={closeBoxStyle}>
             <Tooltip content="Close and clear trace selection">
-              <Button id="close-trace" variant="plain" onClick={this.props.close}>
+              <Button id="close-trace" variant={ButtonVariant.plain} onClick={this.props.close}>
                 <CloseIcon />
               </Button>
             </Tooltip>
@@ -132,7 +136,15 @@ class SummaryPanelTraceDetails extends React.Component<Props, State> {
         <div>
           {tracesDetailsURL ? (
             <Tooltip content={`View trace details for: ${info.name()}`}>
-              <Link to={tracesDetailsURL}>{title}</Link>
+              <Link
+                to={tracesDetailsURL}
+                onClick={() => {
+                  if (isParentKiosk(this.props.kiosk)) {
+                    kioskContextMenuAction(tracesDetailsURL);
+                  }
+                }}
+              >{title}
+              </Link>
             </Tooltip>
           ) : (
             <Tooltip content={`${info.name()}`}>{title}</Tooltip>
@@ -224,7 +236,14 @@ class SummaryPanelTraceDetails extends React.Component<Props, State> {
         </div>
         {spanURL && (
           <div>
-            <Link to={spanURL}>Show span</Link>
+            <Link
+              to={spanURL}
+              onClick={() => {
+                if (isParentKiosk(this.props.kiosk)) {
+                  kioskContextMenuAction(spanURL);
+                }
+              }}
+            >Show span</Link>
           </div>
         )}
       </>
@@ -338,10 +357,14 @@ class SummaryPanelTraceDetails extends React.Component<Props, State> {
   }
 }
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => ({
+const mapStateToProps = (state: KialiAppState) => ({
+  kiosk: state.globalState.kiosk,
+});
+
+const mapDispatchToProps = (dispatch: KialiDispatch) => ({
   close: () => dispatch(JaegerThunkActions.setTraceId(undefined)),
   setNode: bindActionCreators(GraphActions.setNode, dispatch)
 });
 
-const SummaryPanelTraceDetailsContainer = connect(() => ({}), mapDispatchToProps)(SummaryPanelTraceDetails);
+const SummaryPanelTraceDetailsContainer = connect(mapStateToProps, mapDispatchToProps)(SummaryPanelTraceDetails);
 export default SummaryPanelTraceDetailsContainer;

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Card, CardBody, Grid, GridItem } from '@patternfly/react-core';
+import { Card, CardBody, Grid, GridItem, Toolbar, ToolbarGroup, ToolbarItem } from '@patternfly/react-core';
 import * as AlertUtils from '../../utils/AlertUtils';
 import {
   GraphDefinition,
@@ -14,13 +14,16 @@ import { RenderComponentScroll } from '../Nav/Page';
 import { MetricsObjectTypes } from '../../types/Metrics';
 import GraphDataSource from 'services/GraphDataSource';
 import { DurationInSeconds, TimeInMilliseconds } from 'types/Common';
-import TrafficListComponent from 'components/TrafficList/TrafficListComponent';
 import * as FilterHelper from '../FilterList/FilterHelper';
 import * as TrafficListFilters from './FiltersAndSorts';
 import { KialiAppState } from '../../store/Store';
 import { connect } from 'react-redux';
 import { durationSelector } from '../../store/Selectors';
 import { HealthAnnotationType } from '../../types/HealthAnnotation';
+import TrafficListComponentContainer from "components/TrafficList/TrafficListComponent";
+import { KioskElement } from "../Kiosk/KioskElement";
+import { TimeDurationModal } from "../Time/TimeDurationModal";
+import TimeDurationIndicatorContainer from "../Time/TimeDurationIndicatorComponent";
 
 export interface AppNode {
   id: string;
@@ -60,17 +63,22 @@ export interface TrafficItem {
   node: TrafficNode;
   proxy?: TrafficItem;
   traffic: ProtocolTraffic;
+  mTLS?: number;
 }
 
-type TrafficDetailsProps = {
+type ReduxProps = {
   duration: DurationInSeconds;
+}
+
+type TrafficDetailsProps = ReduxProps & {
   itemName: string;
   itemType: MetricsObjectTypes;
-  namespace: string;
   lastRefreshAt: TimeInMilliseconds;
+  namespace: string;
 };
 
 type TrafficDetailsState = {
+  isTimeOptionsOpen: boolean;
   traffic: TrafficItem[];
 };
 
@@ -80,6 +88,7 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
   constructor(props: TrafficDetailsProps) {
     super(props);
     this.state = {
+      isTimeOptionsOpen: false,
       traffic: []
     };
   }
@@ -115,7 +124,16 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
             <GridItem span={12}>
               <Card>
                 <CardBody>
-                  <TrafficListComponent
+                  <Toolbar style={{ padding: 0, width: '100%' }}>
+                    <ToolbarGroup>
+                      <KioskElement>
+                        <ToolbarItem style={{ marginLeft: 'auto' }}>
+                          <TimeDurationIndicatorContainer isDuration={true} onClick={this.toggleTimeOptionsVisibility} />
+                        </ToolbarItem>
+                      </KioskElement>
+                    </ToolbarGroup>
+                  </Toolbar>
+                  <TrafficListComponentContainer
                     currentSortField={FilterHelper.currentSortField(TrafficListFilters.sortFields)}
                     isSortAscending={FilterHelper.isCurrentSortAscending()}
                     trafficItems={this.state.traffic}
@@ -125,6 +143,11 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
             </GridItem>
           </Grid>
         </RenderComponentScroll>
+        <TimeDurationModal
+          customDuration={false}
+          isOpen={this.state.isTimeOptionsOpen}
+          onConfirm={this.toggleTimeOptionsVisibility}
+          onCancel={this.toggleTimeOptionsVisibility} />
       </>
     );
   }
@@ -138,6 +161,7 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
           this.props.itemName
         );
         params.includeHealth = false;
+        params.showSecurity = true;
         this.graphDataSource.fetchGraphData(params);
         break;
       }
@@ -149,6 +173,7 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
         );
         params.includeHealth = false;
         params.injectServiceNodes = false;
+        params.showSecurity = true;
         this.graphDataSource.fetchGraphData(params);
         break;
       }
@@ -160,6 +185,7 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
         );
         params.includeHealth = false;
         params.injectServiceNodes = false;
+        params.showSecurity = true;
         this.graphDataSource.fetchGraphData(params);
         break;
       }
@@ -229,14 +255,16 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
         const trafficItem: TrafficItem = {
           direction: 'outbound',
           node: this.buildTrafficNode('out', targetNode),
-          traffic: edge.data.traffic!
+          traffic: edge.data.traffic!,
+          mTLS: edge.data.isMTLS
         };
         traffic.push(trafficItem);
       } else if (myNode.id === edge.data.target) {
         const trafficItem: TrafficItem = {
           direction: 'inbound',
           node: this.buildTrafficNode('in', sourceNode),
-          traffic: edge.data.traffic!
+          traffic: edge.data.traffic!,
+          mTLS: edge.data.isMTLS
         };
         traffic.push(trafficItem);
       }
@@ -296,12 +324,15 @@ class TrafficDetails extends React.Component<TrafficDetailsProps, TrafficDetails
     // Process the direct inbound/outbound traffic to/from the item of interest.
     this.setState(this.processTraffic(traffic.elements.edges!, nodes, myNode));
   };
+
+  private toggleTimeOptionsVisibility = () => {
+    this.setState(prevState => ({ isTimeOptionsOpen: !prevState.isTimeOptionsOpen }) );
+  }
 }
 
 const mapStateToProps = (state: KialiAppState) => {
   return {
     duration: durationSelector(state),
-    lastRefreshAt: state.globalState.lastRefreshAt
   };
 };
 

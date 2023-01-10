@@ -150,6 +150,8 @@ func (in *SvcService) GetServiceList(ctx context.Context, criteria ServiceCriter
 			Namespace:               criteria.Namespace,
 			IncludeDestinationRules: true,
 			IncludeGateways:         true,
+			IncludeK8sGateways:      true,
+			IncludeK8sHTTPRoutes:    true,
 			IncludeServiceEntries:   true,
 			IncludeVirtualServices:  true,
 		}
@@ -187,7 +189,7 @@ func (in *SvcService) GetServiceList(ctx context.Context, criteria ServiceCriter
 	return services, nil
 }
 
-func getVSKialiScenario(vs []networking_v1beta1.VirtualService) string {
+func getVSKialiScenario(vs []*networking_v1beta1.VirtualService) string {
 	scenario := ""
 	for _, v := range vs {
 		if scenario, ok := v.Labels["kiali_wizard"]; ok {
@@ -197,7 +199,7 @@ func getVSKialiScenario(vs []networking_v1beta1.VirtualService) string {
 	return scenario
 }
 
-func getDRKialiScenario(dr []networking_v1beta1.DestinationRule) string {
+func getDRKialiScenario(dr []*networking_v1beta1.DestinationRule) string {
 	scenario := ""
 	for _, d := range dr {
 		if scenario, ok := d.Labels["kiali_wizard"]; ok {
@@ -235,6 +237,8 @@ func (in *SvcService) buildKubernetesServices(svcs []core_v1.Service, pods []cor
 		svcVirtualServices := kubernetes.FilterVirtualServicesByService(istioConfigList.VirtualServices, item.Namespace, item.Name)
 		svcDestinationRules := kubernetes.FilterDestinationRulesByService(istioConfigList.DestinationRules, item.Namespace, item.Name)
 		svcGateways := kubernetes.FilterGatewaysByVirtualServices(istioConfigList.Gateways, svcVirtualServices)
+		svcK8sHTTPRoutes := kubernetes.FilterK8sHTTPRoutesByService(istioConfigList.K8sHTTPRoutes, item.Namespace, item.Name)
+		svcK8sGateways := kubernetes.FilterK8sGatewaysByHTTPRoutes(istioConfigList.K8sGateways, svcK8sHTTPRoutes)
 		svcReferences := make([]*models.IstioValidationKey, 0)
 		for _, vs := range svcVirtualServices {
 			ref := models.BuildKey(vs.Kind, vs.Name, vs.Namespace)
@@ -246,6 +250,16 @@ func (in *SvcService) buildKubernetesServices(svcs []core_v1.Service, pods []cor
 		}
 		for _, gw := range svcGateways {
 			ref := models.BuildKey(gw.Kind, gw.Name, gw.Namespace)
+			svcReferences = append(svcReferences, &ref)
+		}
+		for _, gw := range svcK8sGateways {
+			// Should be K8s type to generate correct link
+			ref := models.BuildKey(kubernetes.K8sGatewayType, gw.Name, gw.Namespace)
+			svcReferences = append(svcReferences, &ref)
+		}
+		for _, route := range svcK8sHTTPRoutes {
+			// Should be K8s type to generate correct link
+			ref := models.BuildKey(kubernetes.K8sHTTPRouteType, route.Name, route.Namespace)
 			svcReferences = append(svcReferences, &ref)
 		}
 		svcReferences = FilterUniqueIstioReferences(svcReferences)
@@ -280,14 +294,16 @@ func (in *SvcService) buildKubernetesServices(svcs []core_v1.Service, pods []cor
 // The only way to identify it is to check that the service has an address in the current cluster.
 // To avoid side effects, Kiali will process only services that belongs to the current cluster.
 // This should be revisited on more multi-cluster deployments scenarios.
-//     "hostname": "test-svc.evil.svc.cluster.local",
-//    "clusterVIPs": {
-//      "Addresses": {
-//        "istio-west": [
-//          "0.0.0.0"
-//        ]
-//      }
-//    },
+//
+//	{
+//		"hostname": "test-svc.evil.svc.cluster.local",
+//		"clusterVIPs": {
+//			"Addresses": {
+//				"istio-west": [
+//					"0.0.0.0"
+//				]
+//			}
+//	}
 func (in *SvcService) getClusterId() string {
 	// By default Istio uses "Kubernetes" as clusterId for single control planes scenarios.
 	// This clusterId is propagated into the Istio Registry and we need it to filter services in multi-cluster scenarios.
@@ -417,6 +433,7 @@ func (in *SvcService) GetServiceDetails(ctx context.Context, namespace, service,
 	var hth models.ServiceHealth
 	var istioConfigList models.IstioConfigList
 	var ws models.Workloads
+	var rSvcs []*kubernetes.RegistryService
 	var nsmtls models.MTLSStatus
 
 	wg := sync.WaitGroup{}
@@ -426,7 +443,7 @@ func (in *SvcService) GetServiceDetails(ctx context.Context, namespace, service,
 	labelsSelector := labels.Set(svc.Selectors).String()
 	// If service doesn't have any selector, we can't know which are the pods and workloads applying.
 	if labelsSelector != "" {
-		wg.Add(2)
+		wg.Add(3)
 
 		go func() {
 			defer wg.Done()
@@ -452,6 +469,19 @@ func (in *SvcService) GetServiceDetails(ctx context.Context, namespace, service,
 				errChan <- err2
 			}
 		}(ctx)
+
+		go func() {
+			defer wg.Done()
+			var err2 error
+			registryCriteria := RegistryCriteria{
+				Namespace: namespace,
+			}
+			rSvcs, err2 = in.businessLayer.RegistryStatus.GetRegistryServices(registryCriteria)
+			if err2 != nil {
+				log.Errorf("Error fetching Registry Services per namespace %s: %s", registryCriteria.Namespace, err2)
+				errChan <- err2
+			}
+		}()
 	}
 
 	go func() {
@@ -512,6 +542,8 @@ func (in *SvcService) GetServiceDetails(ctx context.Context, namespace, service,
 			IncludeDestinationRules: true,
 			// TODO the frontend is merging the Gateways per ServiceDetails but it would be a clean design to locate it here
 			IncludeGateways:        true,
+			IncludeK8sGateways:     true,
+			IncludeK8sHTTPRoutes:   true,
 			IncludeServiceEntries:  true,
 			IncludeVirtualServices: true,
 		}
@@ -547,7 +579,38 @@ func (in *SvcService) GetServiceDetails(ctx context.Context, namespace, service,
 		wo = append(wo, wi)
 	}
 
-	s := models.ServiceDetails{Workloads: wo, Health: hth, NamespaceMTLS: nsmtls}
+	serviceOverviews := make([]*models.ServiceOverview, 0)
+	// Convert filtered k8s services into ServiceOverview, only several attributes are needed
+	for _, item := range rSvcs {
+		// app label selector of services should match, loading all versions
+		if selector, err3 := labels.ConvertSelectorToLabelsMap(labelsSelector); err3 == nil {
+			if appSelector, ok := item.Attributes.LabelSelectors["app"]; ok && selector.Has("app") && appSelector == selector.Get("app") {
+				if _, ok1 := item.Attributes.LabelSelectors["version"]; ok1 {
+					ports := map[string]int{}
+					for _, port := range item.Ports {
+						ports[port.Name] = port.Port
+					}
+					serviceOverviews = append(serviceOverviews, &models.ServiceOverview{
+						Name:  item.Attributes.Name,
+						Ports: ports,
+					})
+				}
+			}
+		}
+	}
+	// loading the single service if no versions
+	if len(serviceOverviews) == 0 {
+		ports := map[string]int{}
+		for _, port := range svc.Ports {
+			ports[port.Name] = int(port.Port)
+		}
+		serviceOverviews = append(serviceOverviews, &models.ServiceOverview{
+			Name:  svc.Name,
+			Ports: ports,
+		})
+	}
+
+	s := models.ServiceDetails{Workloads: wo, Health: hth, NamespaceMTLS: nsmtls, SubServices: serviceOverviews}
 	s.Service = svc
 	s.SetPods(kubernetes.FilterPodsByEndpoints(eps, pods))
 	// ServiceDetail will consider if the Service is a External/Federation entry
@@ -563,8 +626,9 @@ func (in *SvcService) GetServiceDetails(ctx context.Context, namespace, service,
 		Update: vsUpdate,
 		Delete: vsDelete,
 	}
-	s.VirtualServices = kubernetes.FilterVirtualServicesByService(istioConfigList.VirtualServices, namespace, service)
+	s.VirtualServices = kubernetes.FilterAutogeneratedVirtualServices(kubernetes.FilterVirtualServicesByService(istioConfigList.VirtualServices, namespace, service))
 	s.DestinationRules = kubernetes.FilterDestinationRulesByService(istioConfigList.DestinationRules, namespace, service)
+	s.K8sHTTPRoutes = kubernetes.FilterK8sHTTPRoutesByService(istioConfigList.K8sHTTPRoutes, namespace, service)
 	if s.Service.Type == "External" || s.Service.Type == "Federation" {
 		// On ServiceEntries cases the Service name is the hostname
 		s.ServiceEntries = kubernetes.FilterServiceEntriesByHostname(istioConfigList.ServiceEntries, s.Service.Name)
@@ -592,7 +656,7 @@ func (in *SvcService) UpdateService(ctx context.Context, namespace, service stri
 
 	// Cache is stopped after a Create/Update/Delete operation to force a refresh
 	if kialiCache != nil && err == nil {
-		kialiCache.RefreshNamespace(namespace)
+		kialiCache.Refresh(namespace)
 	}
 
 	// After the update we fetch the whole workload

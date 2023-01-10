@@ -9,16 +9,16 @@ import {
   Accordion,
   AccordionToggle,
   AccordionItem,
-  AccordionContent
+  AccordionContent,
+  ButtonVariant
 } from '@patternfly/react-core';
 import { CloseIcon, InfoIcon } from '@patternfly/react-icons';
 import { connect } from 'react-redux';
-import { ThunkDispatch } from 'redux-thunk';
+import { KialiDispatch } from 'types/Redux';
 import { KialiAppState } from 'store/Store';
 import { style } from 'typestyle';
 import { NotificationMessage, NotificationGroup } from '../../types/MessageCenter';
 import { MessageCenterActions } from 'actions/MessageCenterActions';
-import { KialiAppAction } from 'actions/KialiAppAction';
 import AlertDrawerGroupContainer from './AlertDrawerGroup';
 import {
   BoundingClientAwareComponent,
@@ -93,15 +93,15 @@ export class AlertDrawer extends React.PureComponent<AlertDrawerProps> {
           <CardHeader className={AlertDrawer.head}>
             <CardActions>
               {this.props.isExpanded ? (
-                <Button id="alert_drawer_collapse" variant="plain" onClick={this.props.expandDrawer}>
+                <Button id="alert_drawer_collapse" variant={ButtonVariant.plain} onClick={this.props.expandDrawer}>
                   <KialiIcon.AngleDoubleRight />
                 </Button>
               ) : (
-                <Button id="alert_drawer_expand" variant="plain" onClick={this.props.expandDrawer}>
+                <Button id="alert_drawer_expand" variant={ButtonVariant.plain} onClick={this.props.expandDrawer}>
                   <KialiIcon.AngleDoubleLeft />
                 </Button>
               )}
-              <Button id="alert_drawer_close" variant="plain" onClick={this.props.hideDrawer}>
+              <Button id="alert_drawer_close" variant={ButtonVariant.plain} onClick={this.props.hideDrawer}>
                 <CloseIcon />
               </Button>
             </CardActions>
@@ -153,7 +153,7 @@ const mapStateToProps = (state: KialiAppState) => {
   };
 };
 
-const mapDispatchToProps = (dispatch: ThunkDispatch<KialiAppState, void, KialiAppAction>) => {
+const mapDispatchToProps = (dispatch: KialiDispatch) => {
   return {
     expandDrawer: () => dispatch(MessageCenterActions.toggleExpandedMessageCenter()),
     hideDrawer: () => dispatch(MessageCenterActions.hideMessageCenter()),

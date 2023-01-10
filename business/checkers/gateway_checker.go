@@ -10,8 +10,7 @@ import (
 const GatewayCheckerType = "gateway"
 
 type GatewayChecker struct {
-	Gateways              []networking_v1beta1.Gateway
-	Namespace             string
+	Gateways              []*networking_v1beta1.Gateway
 	WorkloadsPerNamespace map[string]models.WorkloadList
 	IsGatewayToNamespace  bool
 }
@@ -24,15 +23,13 @@ func (g GatewayChecker) Check() models.IstioValidations {
 	}.Check()
 
 	for _, gw := range g.Gateways {
-		if gw.Namespace == g.Namespace {
-			validations.MergeValidations(g.runSingleChecks(gw))
-		}
+		validations.MergeValidations(g.runSingleChecks(gw))
 	}
 
 	return validations
 }
 
-func (g GatewayChecker) runSingleChecks(gw networking_v1beta1.Gateway) models.IstioValidations {
+func (g GatewayChecker) runSingleChecks(gw *networking_v1beta1.Gateway) models.IstioValidations {
 	key, validations := EmptyValidValidation(gw.Name, gw.Namespace, GatewayCheckerType)
 
 	enabledCheckers := []Checker{
